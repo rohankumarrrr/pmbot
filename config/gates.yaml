@@ -1,0 +1,36 @@
+# Go / no-go thresholds, written down on 2026-11-16 before any forecast had resolved.
+# Changing a number here after seeing results defeats the purpose; add a dated note instead.
+
+gate0:   # shadow mode: does the forecast add anything to the market price?
+  min_resolved_events: 350          # independent events, not markets or trades
+  confirmation_fraction: 0.5        # later half by forecast date; tuning is allowed on the earlier half only
+  pass_if:
+    - blended forecast beats the market mid on Brier score in the confirmation half,
+      with the 95% event-bootstrap interval for the difference entirely below zero
+    - simulated profit after fees is positive on the markets the bot would trade
+    - that profit stays positive with the single most profitable event removed
+  stop_if:
+    - the blend does not beat the price
+    - the edge appears only in one event cluster or one week
+
+gate1:   # execution plumbing on the demo exchange
+  pass_if:
+    - no duplicate or orphaned orders across forced restarts
+    - kill switch and cancel-all verified against the exchange
+    - ledger fills match exchange fills exactly
+
+gate2:   # small live test, fixed bankroll, no top-ups
+  min_fills: 100
+  min_events: 50
+  bankroll_usd: [250, 1000]
+  pass_if:
+    - trading profit after fees is at least zero
+    - realised edge per contract is at least half the gate0 estimate
+    - median slippage from decision price to fill price is below the minimum edge
+  halt_if:
+    - equity falls 20% below its peak
+    - the last 100 live forecasts trail the market on Brier score
+
+gate3:   # scaling
+  rule: at most double the bankroll per quarter, and only while gate2 conditions hold on the trailing window
+  also: inference cost must be under 25% of expected profit at the new bankroll

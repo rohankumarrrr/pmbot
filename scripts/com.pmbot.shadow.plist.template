@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Keeps the bot running across logins and restarts.
+     Install:   sed "s|__PROJECT__|$(pwd)|g" scripts/com.pmbot.shadow.plist.template > ~/Library/LaunchAgents/com.pmbot.shadow.plist
+                launchctl load ~/Library/LaunchAgents/com.pmbot.shadow.plist
+     Remove:    launchctl unload ~/Library/LaunchAgents/com.pmbot.shadow.plist && rm ~/Library/LaunchAgents/com.pmbot.shadow.plist -->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.pmbot.shadow</string>
+    <key>ProgramArguments</key><array><string>__PROJECT__/scripts/run_bot.sh</string></array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>60</integer>
+    <key>StandardErrorPath</key><string>__PROJECT__/logs/launchd.err</string>
+</dict>
+</plist>

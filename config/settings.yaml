@@ -1,0 +1,81 @@
+# pmbot settings. Edit here; code defaults mirror this file.
+
+mode: shadow              # shadow = no orders, simulated fills | demo = Kalshi demo exchange | live = real money
+bankroll_usd: 1000        # used in shadow and demo; live mode reads the exchange balance
+ledger_path: data/ledger.sqlite
+
+kalshi:
+  # Credentials live outside the project: <credentials_dir>/<mode>/key_id (one line)
+  # and <credentials_dir>/<mode>/private_key.pem, where <mode> is demo or live.
+  credentials_dir: ~/.config/pmbot
+  subaccount:                                # leave empty for the primary account
+
+universe:
+  exclude_categories: [Sports, Crypto, Mentions, Climate and Weather, Exotics]
+  shadow_only_categories: [Politics, Elections, Financials]   # forecast and score, never trade
+  mid_min: 0.15
+  mid_max: 0.85
+  max_spread: 0.04
+  min_top_size: 20            # contracts at both best bid and best ask
+  min_days_to_close: 2
+  max_days_to_close: 60
+  prefer_listing_age_days: 7  # newer listings rank first; not a hard cut
+  max_markets_per_event: 12
+
+forecast:
+  daily_event_budget: 12
+  daily_cost_cap_usd: 8.0
+  max_events_per_cycle: 2     # a forecast takes ~3 minutes; keep cycles short so resting orders stay maintained
+  holdout_fraction: 0.15      # share of forecast slots filled at random, bypassing the screen
+  screen_model: haiku
+  research_model: sonnet
+  ensemble: [[opus, 2], [sonnet, 2], [haiku, 1]]
+  effort: high
+  min_information_edge: 1
+  reforecast_after_hours: 72
+
+trading:
+  w_market: 0.67              # weight on the (bias-corrected) market price in the blend
+  # Correction for how prices in these categories have resolved: win rate = sigmoid(a + b*logit(price)).
+  # Fitted on 2026 trades; H2-only values used because the YES overpricing faded during the year
+  # (full-year fit: a=-0.17, b=1.135). Set a=0, b=1 to switch the correction off.
+  price_prior_a: -0.05
+  price_prior_b: 1.10
+  platt_a: 1.0                # calibration slope; identity until fitted on resolved forecasts
+  platt_b: 0.0
+  kelly_mult: 0.2
+  max_fraction_per_market: 0.03
+  max_fraction_per_cluster: 0.10
+  min_edge: 0.03
+  spread_edge_mult: 1.0       # edge must also exceed this x the ensemble's standard deviation
+  order_ttl_hours: 12
+  forecast_ttl_hours: 24
+  max_mid_move: 0.03          # mid moved more than this since the forecast -> do not trade on it
+
+lp:   # liquidity provision in markets that pay Kalshi liquidity rewards
+  enabled: true
+  capital_fraction: 0.6         # share of the bankroll that may sit in resting LP orders and LP inventory
+  contracts_per_side: 50
+  min_contracts: 10
+  max_at_risk_per_quote: 30.0   # dollars lost if one quote fills and the market goes fully against it
+  max_quotes: 120
+  min_yield_day: 0.005          # net of expected fill losses: (reward/day + fill_prob_day x fill_return) / dollars at risk
+  # What a filled resting order has returned per dollar staked, by the price paid (2026 non-sports makers).
+  # Cheap bids lose most of their stake when filled; bids on the favourite make a little.
+  fill_prob_day: 0.10           # assumed chance per day that a quote fills in full; replace with the measured rate
+  fill_return: [[0.15, -0.45], [0.50, -0.15], [0.85, 0.05], [1.01, 0.02]]   # [price below, return]
+  min_expected_payout: 1.5      # a program pays nothing under $1 for its period
+  exclude_categories: [Sports, Crypto, Mentions]
+  min_hours_to_close: 48
+  min_hours_left_in_program: 6
+  max_day_move: 0.08            # skip markets whose price moved more than this in a day
+  max_volume_24h: 2000          # contracts; busier markets mean more fills per reward dollar
+  requote_ticks: 1              # move an order when the reference price is this many ticks away
+  refresh_programs_minutes: 60
+
+risk:
+  max_drawdown: 0.20
+  daily_loss_limit: 0.05
+  max_open_orders: 120
+  max_orders_per_hour: 90
+  order_group_contracts_limit: 500

@@ -1,0 +1,20 @@
+# Execution test on Kalshi's DEMO exchange (fake money). Run with:
+#   PMBOT_CONFIG=config/demo.yaml pmbot cycle --every 300 --no-forecast
+# Tests plumbing only: demo prices are not realistic and demo has no reward programs.
+extends: settings.yaml
+
+mode: demo
+ledger_path: data/ledger_demo.sqlite
+
+trading:
+  max_fraction_per_market: 0.05
+
+lp:
+  # Demo lists no liquidity programs, so pretend every active market has one. The "rewards"
+  # this produces mean nothing; the point is real orders being placed, moved, cancelled and filled.
+  synthetic_programs: {reward_day: 100.0, target: 1000, discount: 0.5, max_markets: 300}
+  contracts_per_side: 10
+  min_contracts: 2
+  max_at_risk_per_quote: 5.0
+  max_quotes: 40
+  min_expected_payout: 0.0

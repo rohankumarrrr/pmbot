@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.egg-info/
+data/
+logs/
+research/out/
+.pytest_cache/
+docs/STATUS.md
+vendor/
+.DS_Store
