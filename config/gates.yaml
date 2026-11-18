@@ -34,3 +34,15 @@ gate2:   # small live test, fixed bankroll, no top-ups
 gate3:   # scaling
   rule: at most double the bankroll per quarter, and only while gate2 conditions hold on the trailing window
   also: inference cost must be under 25% of expected profit at the new bankroll
+
+lp_live_test:   # added 2026-11-17, before any live order: is the liquidity-reward estimate real?
+  bankroll_usd: 100                 # fixed, no top-ups; config/live.yaml
+  duration_days: 7
+  continue_if:
+    - rewards Kalshi credits are at least half of the bot's estimate for the same orders and period
+    - credited rewards can be withdrawn as cash
+    - credited rewards exceed the loss on filled positions (marked to market) over the test
+  stop_if:
+    - any of the three fails
+    - equity falls 20% below its peak (the bot halts itself)
+    - the ledger and the exchange disagree twice in a row (the bot halts itself)

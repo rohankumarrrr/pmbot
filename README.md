@@ -21,7 +21,7 @@ A price-only baseline is logged for every eligible market, so the forecaster has
 | `demo` | Sent to Kalshi's demo exchange | Fake |
 | `live` | Sent to Kalshi | Real |
 
-`config/settings.yaml` is the paper setup. `config/demo.yaml` overrides it for the demo exchange; select it with `PMBOT_CONFIG=config/demo.yaml`.
+`config/settings.yaml` is the paper setup. `config/demo.yaml` and `config/live.yaml` override it for the demo exchange and for a small real-money reward test; select one with `PMBOT_CONFIG=config/demo.yaml`.
 
 ## Setup
 
@@ -51,6 +51,7 @@ pmbot resume
 - `scripts/check_consistency.py` compares the ledger with the exchange.
 - `scripts/checkin.py` prints a JSON health summary of both loops.
 - `scripts/gate1_demo_drill.py` runs seven execution drills against the demo exchange.
+- `deploy/setup_server.sh` installs the live bot as a systemd service on an Ubuntu server. It will not start without credentials.
 
 Each forecast costs about $0.50 of Claude usage and takes about three minutes. `forecast.daily_cost_cap_usd` bounds the spend.
 

@@ -1,0 +1,25 @@
+# Live reward test on Kalshi (REAL money). Reward quoting only; forecasts are not traded. Run with:
+#   PMBOT_CONFIG=config/live.yaml pmbot cycle --every 300 --no-forecast
+# Needs ~/.config/pmbot/live/key_id and private_key.pem. The bankroll is the account balance,
+# so fund the account (or subaccount) with the test amount and nothing more.
+extends: settings.yaml
+
+mode: live
+ledger_path: data/ledger_live.sqlite
+
+kalshi:
+  subaccount:                   # set to the subaccount number if the key is restricted to one
+
+trading:
+  max_fraction_per_market: 0.05   # $5 of a $100 bankroll
+
+lp:
+  max_at_risk_per_quote: 5.0      # dollars; about 19 quotes at $100
+  min_contracts: 10
+  max_quotes: 30
+
+risk:
+  max_drawdown: 0.20              # halt and cancel everything $20 below peak on $100
+  daily_loss_limit: 0.10          # $10 a day on $100; the 5% default would trip on a single filled quote
+  max_open_orders: 40
+  max_orders_per_hour: 60
