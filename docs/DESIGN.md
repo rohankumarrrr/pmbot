@@ -39,10 +39,11 @@ Program rules, from Kalshi's CFTC filing and help centre:
 What the bot does with them:
 
 - **Where to quote.** At the reference price, not the best price. It earns full weight while standing behind the orders ahead of it.
-- **Which quotes.** Rank every eligible (market, side) by net yield: `(reward per day + fill_prob_day × fill_return(price)) ÷ dollars at risk`. `fill_return` is what filled resting orders returned at that price in 2026 (−45% under 15¢, −15% at 15–50¢, +5% at 50–85¢, +2% above). `fill_prob_day` starts at an assumed 10% and should be replaced by the rate the shadow run measures. Take the best until the capital budget or the quote limit is reached.
+- **Which quotes.** Rank every eligible (market, side) by net yield: `(reward per day + fill_prob_day × fill_return(price)) ÷ dollars at risk`. `fill_return` is what filled resting orders returned at that price in 2026 (−45% under 15¢, −15% at 15–50¢, +5% at 50–85¢, +2% above). `fill_prob_day` is 25%, the rate the paper run measured on 2026-11-17 (0.22 a day under 15¢, 0.42 at 15–50¢, from 20 simulated fills); it started as an assumed 10%. Take the best until the capital budget or the quote limit is reached.
 - **What it avoids.** Sports, crypto and mention markets; markets closing within 48 hours; markets whose price moved more than 8¢ in a day; markets trading more than 2,000 contracts a day; series that charge maker fees. These are where a resting order is most likely to be filled by someone who knows more.
 - **Size.** 50 contracts a side, cut down so no quote risks more than $30. At most 60% of the bankroll in quotes and inventory, across at most 120 quotes.
 - **Inventory.** A filled side is held to settlement and not re-quoted while the position is full. The other side keeps quoting; if it fills too, the pair locks in the spread.
+- **Refusals.** If the exchange refuses an order because the book moved while it was being placed, that market is not quoted again for 6 hours.
 - **Upkeep.** A quote is cancelled when the reference price moves a tick away, the side drops below Target Size, the market stops being eligible, the price would cross, or its reward no longer covers its expected fill cost.
 
 In shadow mode the reward is an estimate: each cycle the bot scores the live book with its order added, and credits that share of the pool for the time since the last cycle. Fills are simulated from the trade tape with queue position. Only a live test can confirm what Kalshi actually credits.
@@ -56,7 +57,7 @@ In shadow mode the reward is an estimate: each cycle the bot scores the live boo
 - **Anchor.** The market mid is first corrected for how such prices resolved in 2026: `anchor = sigmoid(a + b·logit(mid))` with `a = −0.05, b = 1.10`.
 - **Blend.** `p_final = sigmoid(w·logit(anchor) + (1−w)·logit(p_model))` with `w = 0.67` until refitted on resolved forecasts. Model calibration is the identity until then too.
 - **Baseline.** Every universe market gets a price-only prediction (the anchor) logged once a week. It costs nothing, resolves by the hundred, and is the benchmark the model has to beat.
-- **Budget.** Up to 12 events a day and 2 per cycle, one event per series per day.
+- **Budget.** Up to 12 forecasts in any 24 hours, paced at 2 per 4 hours so they are spread across the day, and one event per series per day. Events the screen or rules check rejects do not use a slot; a daily dollar cap covers everything.
 - **Order.** Post-only, one tick inside the spread when there is room, otherwise joining the best price. Sized at 0.2× Kelly, capped at 3% of bankroll per market and 10% per event. Needs at least 3¢ of edge after fees, and more than the ensemble's own disagreement.
 - **Staleness.** Prices are re-read after research. An order is pulled if the mid moves more than 3¢ from the decision.
 

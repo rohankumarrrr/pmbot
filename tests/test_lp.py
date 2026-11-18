@@ -103,6 +103,48 @@ def test_cheap_bids_need_more_reward_than_bids_on_the_favourite():
     cfg = config.load("config/settings.yaml")
     cheap = lp.SideQuote("T-1", "yes", 0.06, 50, 0.1, 0.09, 3.0, 0)       # 3%/day gross
     rich = lp.SideQuote("T-1", "no", 0.92, 30, 0.1, 0.276, 27.6, 0)       # 1%/day gross
-    assert cheap.net_yield_day(cfg.lp) == pytest.approx(0.03 + 0.10 * -0.45)   # negative after expected fills
-    assert rich.net_yield_day(cfg.lp) == pytest.approx(0.01 + 0.10 * 0.02)
+    fill = cfg.lp.fill_prob_day
+    assert cheap.net_yield_day(cfg.lp) == pytest.approx(0.03 + fill * -0.45)   # negative after expected fills
+    assert rich.net_yield_day(cfg.lp) == pytest.approx(0.01 + fill * 0.02)
     assert rich.net_yield_day(cfg.lp) > cfg.lp.min_yield_day > cheap.net_yield_day(cfg.lp)
+
+
+def test_market_is_left_alone_after_the_exchange_refuses_an_order():
+    import copy
+
+    from pmbot.execution.brokers import ShadowBroker
+    from pmbot.ledger.db import Ledger, now
+    from pmbot.lp_runner import LiquidityProvider
+    from pmbot.risk import RiskManager
+    from test_core import Tape
+
+    cfg = config.Config(copy.deepcopy(dict(config.load("config/settings.yaml"))))
+    ledger = Ledger(":memory:")
+    provider = LiquidityProvider(cfg, ledger, object(), ShadowBroker(ledger, Tape([])), RiskManager(ledger, cfg, "shadow", 1000.0), "shadow")
+    args = ({"T-1": program()}, {"T-1": quote()}, {"T-1": (YES, [(0.55, 300), (0.54, 900)])}, 0.0)
+
+    ledger.insert("orders", {"client_order_id": "pm-x", "ticker": "T-1", "side": "yes", "price": 0.39, "contracts": 50,
+                             "mode": "shadow", "status": "rejected", "created_ts": now() - 3600})
+    assert provider.place(*args) == 0            # refused an hour ago: still cooling off
+    ledger.execute("UPDATE orders SET created_ts=? WHERE client_order_id='pm-x'", [now() - 7 * 3600])
+    assert provider.place(*args) == 2            # seven hours ago: quoted again, both sides
+
+
+def test_cancel_reasons_are_counted_for_the_cycle_log():
+    import copy
+
+    from pmbot.execution.brokers import ShadowBroker
+    from pmbot.ledger.db import Ledger
+    from pmbot.lp_runner import LiquidityProvider
+    from pmbot.risk import RiskManager
+    from test_core import Tape
+
+    cfg = config.Config(copy.deepcopy(dict(config.load("config/settings.yaml"))))
+    ledger = Ledger(":memory:")
+    provider = LiquidityProvider(cfg, ledger, object(), ShadowBroker(ledger, Tape([])), RiskManager(ledger, cfg, "shadow", 1000.0), "shadow")
+    programs, quotes, no = {"T-1": program()}, {"T-1": quote()}, [(0.55, 300), (0.54, 900)]
+    assert provider.place(programs, quotes, {"T-1": (YES, no)}, 0.0) == 2        # yes at 0.39, no at 0.55
+    # New size at 0.41 lifts the YES reference two ticks above our bid; the NO side is unchanged.
+    moved = [(0.41, 300)] + YES
+    assert provider.prune(provider.my_orders(), programs, quotes, {"T-1": (moved, no)}, 0.0) == 1
+    assert dict(provider.cancel_reasons) == {"reference_moved": 1}

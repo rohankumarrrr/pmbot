@@ -62,7 +62,7 @@ lp:   # liquidity provision in markets that pay Kalshi liquidity rewards
   min_yield_day: 0.005          # net of expected fill losses: (reward/day + fill_prob_day x fill_return) / dollars at risk
   # What a filled resting order has returned per dollar staked, by the price paid (2026 non-sports makers).
   # Cheap bids lose most of their stake when filled; bids on the favourite make a little.
-  fill_prob_day: 0.10           # assumed chance per day that a quote fills in full; replace with the measured rate
+  fill_prob_day: 0.25           # chance per day that a quote fills. Measured 2026-11-17 on paper: 0.22 under 15c, 0.42 at 15-50c (20 fills); was assumed 0.10
   fill_return: [[0.15, -0.45], [0.50, -0.15], [0.85, 0.05], [1.01, 0.02]]   # [price below, return]
   min_expected_payout: 1.5      # a program pays nothing under $1 for its period
   exclude_categories: [Sports, Crypto, Mentions]
@@ -70,6 +70,7 @@ lp:   # liquidity provision in markets that pay Kalshi liquidity rewards
   min_hours_left_in_program: 6
   max_day_move: 0.08            # skip markets whose price moved more than this in a day
   max_volume_24h: 2000          # contracts; busier markets mean more fills per reward dollar
+  reject_cooldown_hours: 6      # after the exchange refuses an order in a market, do not quote it for this long
   requote_ticks: 1              # move an order when the reference price is this many ticks away
   refresh_programs_minutes: 60
 

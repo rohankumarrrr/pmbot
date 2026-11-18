@@ -144,10 +144,20 @@ class Runner:
     # --- forecasting -------------------------------------------------------
 
     def budget_left(self) -> tuple[int, float]:
-        day_start = now() - now() % 86400
-        row = self.ledger.one("SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd),0) AS c FROM forecast_runs WHERE created_ts>=?", [day_start])
+        """(forecast slots open now, dollars left), both over a rolling 24 hours.
+
+        Slots are paced: at most `max_events_per_cycle` forecasts per equal share of the day, so the
+        budget is spread across the day instead of being spent in its first hour. Runs that were
+        skipped (screened out, rules unclear) cost almost nothing and do not use a slot; the dollar
+        cap still counts them.
+        """
         f = self.cfg.forecast
-        return f.daily_event_budget - row["n"], f.daily_cost_cap_usd - row["c"]
+        pace_s = 86400 * f.max_events_per_cycle / f.daily_event_budget
+        made = "SELECT COUNT(*) AS n FROM forecast_runs WHERE skipped IS NULL AND created_ts>?"
+        in_day = self.ledger.one(made, [now() - 86400])["n"]
+        in_pace = self.ledger.one(made, [now() - pace_s])["n"]
+        spent = self.ledger.one("SELECT COALESCE(SUM(cost_usd),0) AS c FROM forecast_runs WHERE created_ts>?", [now() - 86400])["c"]
+        return min(f.daily_event_budget - in_day, f.max_events_per_cycle - in_pace), f.daily_cost_cap_usd - spent
 
     def pick_events(self, cands: list[Candidate], slots: int) -> list[tuple[Candidate, bool]]:
         """(candidate, holdout). Holdout events are drawn at random and skip the screen."""

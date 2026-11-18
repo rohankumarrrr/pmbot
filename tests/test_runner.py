@@ -98,3 +98,33 @@ def test_sibling_series_count_as_one_family():
     from pmbot.runner import family
     assert family("KXAAAGASCDOK") == family("KXAAAGASCDNM")
     assert family("KXSUEZWEEKLY") != family("KXPANAMAWEEKLY")
+
+
+def add_run(runner, hours_ago, skipped=None, cost=0.3):
+    from pmbot.ledger.db import new_id, now
+    runner.ledger.insert("forecast_runs", {"id": new_id(), "event_ticker": "E", "created_ts": now() - int(hours_ago * 3600),
+                                           "skipped": skipped, "cost_usd": cost})
+
+
+def test_forecast_budget_is_paced_across_the_day(runner):
+    # 12 a day at 2 per cycle: 2 forecasts per 4 hours.
+    assert runner.budget_left()[0] == 2
+    add_run(runner, 1)
+    add_run(runner, 3)
+    assert runner.budget_left()[0] == 0          # this 4-hour share is used
+    add_run(runner, 5)
+    assert runner.budget_left()[0] == 0
+    runner.ledger.execute("UPDATE forecast_runs SET created_ts = created_ts - 4*3600")
+    assert runner.budget_left()[0] == 2          # four hours later the next share opens
+
+
+def test_forecast_budget_rolls_over_24_hours_and_ignores_skipped_runs(runner):
+    for h in range(12):
+        add_run(runner, 5 + h)                   # 12 forecasts between 5 and 16 hours ago
+    assert runner.budget_left()[0] == 0          # daily budget used, whatever the clock says
+    runner.ledger.execute("UPDATE forecast_runs SET created_ts = created_ts - 30600")
+    assert runner.budget_left()[0] == 1          # 8.5 hours later the oldest has aged out
+    add_run(runner, 0.1, skipped="screen:rules_unclear", cost=0.001)
+    slots, dollars = runner.budget_left()
+    assert slots == 1                            # a screened-out run does not use a slot
+    assert dollars == pytest.approx(8.0 - 11 * 0.3 - 0.001)   # but its cost counts

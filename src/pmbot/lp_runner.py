@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections import Counter
 
 from . import lp
 from .blend import Sizing
@@ -23,6 +24,7 @@ class LiquidityProvider:
         self.ledger, self.data, self.broker, self.risk, self.mode = ledger, data, broker, risk, mode
         self._programs: dict[str, lp.Program] = {}
         self._programs_ts = 0.0
+        self.cancel_reasons: Counter = Counter()
 
     def programs(self) -> dict[str, lp.Program]:
         if time.time() - self._programs_ts > self.c.refresh_programs_minutes * 60:
@@ -60,6 +62,8 @@ class LiquidityProvider:
         stats = {"lp_programs": len(programs), "lp_eligible_markets": len(eligible)}
         stats["lp_accrued"] = round(self.accrue(orders, programs, by_ticker, books, stamp), 4)
         stats["lp_cancelled"] = self.prune(orders, programs, by_ticker, books, stamp)
+        if self.cancel_reasons:
+            stats["lp_cancel_reasons"] = dict(self.cancel_reasons)   # logged so churn can be diagnosed
         stats["lp_placed"] = self.place(programs, by_ticker, books, stamp)
         self.ledger.set_state(f"lp_last_step:{self.mode}", stamp)
         return stats
@@ -102,6 +106,7 @@ class LiquidityProvider:
     def prune(self, orders, programs, by_ticker, books, stamp: float) -> int:
         """Cancel quotes that stopped earning or drifted away from the reference price."""
         n = 0
+        self.cancel_reasons = Counter()
         for o in orders:
             prog, q, book = programs.get(o["ticker"]), by_ticker.get(o["ticker"]), books.get(o["ticker"])
             reason = None
@@ -128,6 +133,7 @@ class LiquidityProvider:
                         reason = "yield_below_fill_cost"     # the pool got crowded, or the ranking rules changed
             if reason:
                 self.broker.cancel(o["client_order_id"], reason)
+                self.cancel_reasons[reason] += 1
                 n += 1
         return n
 
@@ -150,9 +156,16 @@ class LiquidityProvider:
         budget = self.c.capital_fraction * self.risk.bankroll
         slots = self.c.max_quotes - len(quoted)
         placed = 0
+        # A post-only order is refused when the book moved between reading it and placing the order.
+        # That market is repricing; leave it alone for a while instead of trying again every cycle.
+        cooling = {r["ticker"] for r in self.ledger.query(
+            "SELECT DISTINCT ticker FROM orders WHERE mode=? AND status='rejected' AND created_ts>?",
+            [self.mode, now() - self.c.get("reject_cooldown_hours", 6) * 3600])}
         for sq in lp.rank(programs, by_ticker, books, self.c, self.risk.bankroll, stamp):
             if slots <= 0 or at_risk >= budget:
                 break
+            if sq.ticker in cooling:
+                continue
             key = (sq.ticker, sq.side)
             if key in quoted or held.get(key, 0) >= self.c.contracts_per_side:
                 continue        # already quoting, or already carrying a full position on this side
