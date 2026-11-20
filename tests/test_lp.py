@@ -144,6 +144,9 @@ def test_cancel_reasons_are_counted_for_the_cycle_log():
     provider = LiquidityProvider(cfg, ledger, object(), ShadowBroker(ledger, Tape([])), RiskManager(ledger, cfg, "shadow", 1000.0), "shadow")
     programs, quotes, no = {"T-1": program()}, {"T-1": quote()}, [(0.55, 300), (0.54, 900)]
     assert provider.place(programs, quotes, {"T-1": (YES, no)}, 0.0) == 2        # yes at 0.39, no at 0.55
+    # More size at 0.40 lifts the YES reference one tick above our bid: kept, scoring at the discount.
+    nudged = [(0.40, 300)] + YES[1:]
+    assert provider.prune(provider.my_orders(), programs, quotes, {"T-1": (nudged, no)}, 0.0) == 0
     # New size at 0.41 lifts the YES reference two ticks above our bid; the NO side is unchanged.
     moved = [(0.41, 300)] + YES
     assert provider.prune(provider.my_orders(), programs, quotes, {"T-1": (moved, no)}, 0.0) == 1

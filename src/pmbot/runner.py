@@ -36,7 +36,9 @@ def trading_client(cfg: Config) -> KalshiClient:
     key_id, key_file = creds / "key_id", creds / "private_key.pem"
     if not key_id.exists() or not key_file.exists():
         raise SystemExit(f"{cfg.mode} mode needs {key_id} and {key_file}")
-    return KalshiClient.from_key_file(DEMO if cfg.mode == "demo" else PROD, key_id.read_text().strip(), key_file)
+    client = KalshiClient.from_key_file(DEMO if cfg.mode == "demo" else PROD, key_id.read_text().strip(), key_file)
+    client.subaccount = cfg.kalshi.subaccount
+    return client
 
 
 class Runner:
@@ -46,15 +48,19 @@ class Runner:
         self.ledger = ledger or Ledger(cfg.ledger_path)
         # Market data comes from the exchange we trade on: demo prices differ from production.
         self.data = market_data or KalshiClient(DEMO if self.mode == "demo" else PROD)
+        lease_s = int(cfg.risk.get("order_lease_minutes", 0) * 60) or None
         if broker:
             self.broker = broker
         elif self.mode == "shadow":
-            self.broker = ShadowBroker(self.ledger, self.data)
+            self.broker = ShadowBroker(self.ledger, self.data, lease_s)
         else:
             self.broker = KalshiBroker(self.ledger, trading_client(cfg), self.mode, cfg.kalshi.subaccount,
-                                       cfg.risk.order_group_contracts_limit)
+                                       cfg.risk.order_group_contracts_limit, lease_s)
         self.forecaster = forecaster or Forecaster(config=dict(cfg.forecast))
-        self.risk = RiskManager(self.ledger, cfg, self.mode, self.bankroll())
+        bankroll = self.bankroll()
+        # Equity is measured from the cash the account began with: the balance now, less what the ledger's fills explain.
+        start_cash = bankroll - account(self.ledger, self.mode, 0.0).cash if self.mode in ("demo", "live") else bankroll
+        self.risk = RiskManager(self.ledger, cfg, self.mode, bankroll, start_cash)
         self.lp = LiquidityProvider(cfg, self.ledger, self.data, self.broker, self.risk, self.mode) if cfg.lp.enabled else None
         self.rng = random.Random()
 
@@ -100,8 +106,11 @@ class Runner:
         if self.lp:
             stats.update(self.lp.step(by_ticker))
         stats["baselines"] = self.record_baselines(cands)
+        # Every order the cycle decided to keep gets its lease renewed. If the bot stops, they lapse.
+        stats["leases_renewed"] = self.broker.renew()
         if forecast:
             stats.update(self.forecast_events(cands))
+            self.broker.renew()          # forecasts take minutes
         return stats
 
     def record_baselines(self, cands: list[Candidate]) -> int:
@@ -194,6 +203,7 @@ class Runner:
                 break
             started = time.time()
             try:
+                catalog.attach_rules(self.data, cand.quotes)      # the catalog pull does not keep rules text
                 fc = self.forecaster.run(cand.quotes, skip_screen=holdout)
             except Exception as e:  # one bad event must not stop the cycle
                 log("forecast failed:", cand.event_ticker, str(e)[:200])

@@ -20,8 +20,16 @@ class Verdict:
 
 
 class RiskManager:
-    def __init__(self, ledger: Ledger, cfg, mode: str, bankroll: float):
+    def __init__(self, ledger: Ledger, cfg, mode: str, bankroll: float, start_cash: float | None = None):
+        """`bankroll` sizes orders and limits. `start_cash` is the cash the account began with, before any
+        fill in the ledger; equity is measured from it. They are the same in shadow mode. On an exchange
+        the bankroll is the balance when the process started, which already reflects earlier fills, so
+        measuring equity from it shifted equity at every restart (a false daily-loss halt on demo, 2026-11-19).
+        """
         self.ledger, self.cfg, self.mode, self.bankroll = ledger, cfg, mode, bankroll
+        self.start_cash = bankroll if start_cash is None else start_cash
+        # Peaks and day-opens stored on the old demo/live basis are not comparable, so those modes use new keys.
+        self.state_key = mode if mode == "shadow" else f"{mode}:v2"
         self.t = cfg.trading
         self.r = cfg.risk
 
@@ -46,14 +54,14 @@ class RiskManager:
         """Run every cycle. Returns the halt reason if a limit is breached."""
         if self.halted:
             return self.halted
-        acct = account(self.ledger, self.mode, self.bankroll)
+        acct = account(self.ledger, self.mode, self.start_cash)
         equity = mark_to_market(self.ledger, acct)
-        peak = max(self.ledger.get_state(f"peak_equity:{self.mode}", self.bankroll), equity)
-        self.ledger.set_state(f"peak_equity:{self.mode}", peak)
+        peak = max(self.ledger.get_state(f"peak_equity:{self.state_key}", self.start_cash), equity)
+        self.ledger.set_state(f"peak_equity:{self.state_key}", peak)
         if equity < peak * (1 - self.r.max_drawdown):
             self.halt(f"drawdown: equity {equity:.2f} is more than {self.r.max_drawdown:.0%} below peak {peak:.2f}")
             return self.halted
-        day_key = f"day_open_equity:{self.mode}:{time.strftime('%Y-%m-%d', time.gmtime())}"
+        day_key = f"day_open_equity:{self.state_key}:{time.strftime('%Y-%m-%d', time.gmtime())}"
         day_open = self.ledger.get_state(day_key)
         if day_open is None:
             self.ledger.set_state(day_key, equity)
@@ -70,7 +78,7 @@ class RiskManager:
             return Verdict(False, 0, ["halted"])
         if sizing.side is None or sizing.contracts < 1:
             return Verdict(False, 0, [sizing.reason or "no_trade"])
-        acct = acct or account(self.ledger, self.mode, self.bankroll)
+        acct = acct or account(self.ledger, self.mode, self.start_cash)
         unit = sizing.price + sizing.fee
 
         # Only the unfilled remainder of an order is still at risk of filling; the filled part is a position.

@@ -56,12 +56,20 @@ class FakeExchange:
             oid = f"ord-{len(self.orders) + 1}"
             self.orders[oid] = {"order_id": oid, "client_order_id": body["client_order_id"], "ticker": body["ticker"],
                                 "book_side": body["side"], "yes_price_dollars": body["price"], "status": "resting",
-                                "fill_count_fp": "0.00", "initial_count_fp": body["count"]}
+                                "fill_count_fp": "0.00", "initial_count_fp": body["count"],
+                                "expiration_time": body.get("expiration_time")}
             if self.fail_next_create == "drop":
                 self.fail_next_create = None
                 raise httpx.ReadTimeout("response lost", request=req)
             return httpx.Response(201, json={"order_id": oid, "client_order_id": body["client_order_id"],
                                              "fill_count": "0.00", "remaining_count": body["count"], "ts_ms": 1})
+        if req.method == "POST" and path.startswith(f"{P}/portfolio/events/orders/") and path.endswith("/amend"):
+            order, body = self.orders.get(path.split("/")[-2]), json.loads(req.content)
+            if not order or order["status"] != "resting":
+                return httpx.Response(404, json={"error": {"code": "not_found"}})
+            assert (body["price"], body["count"], body["side"]) == (order["yes_price_dollars"], order["initial_count_fp"], order["book_side"])
+            order["expiration_time"] = body["expiration_time"]
+            return httpx.Response(200, json={"order_id": order["order_id"], "ts_ms": 1})
         if req.method == "DELETE" and path == f"{P}/portfolio/events/orders":
             self._cancel_everything()
             return httpx.Response(204)
@@ -239,3 +247,32 @@ def test_one_bad_check_warns_and_a_second_in_a_row_halts(rig):
     exchange.orders["ord-1"]["status"] = "resting"           # back in agreement: the streak resets
     assert check_and_react(ledger, broker.client, "demo")[1] is False
     assert ledger.get_state("inconsistent_streak:demo") == 0
+
+
+# --- order leases ------------------------------------------------------------
+
+def test_orders_carry_a_short_lease_that_renew_pushes_forward(rig):
+    exchange, broker, ledger = rig
+    broker.lease_s = 900
+    broker.place("d1", "T-1", "no", 0.60, 10, 7 * 86400)
+    (order,) = exchange.orders.values()
+    assert abs(order["expiration_time"] - (time.time() + 900)) < 5      # 15 minutes on the exchange, not 7 days
+    assert broker.renew() == 0                                          # nothing to push yet
+
+    ledger.execute("UPDATE orders SET expires_ts = expires_ts - 600")   # ten minutes later
+    order["expiration_time"] -= 600
+    assert broker.renew() == 1
+    assert abs(order["expiration_time"] - (time.time() + 900)) < 5
+    assert status(ledger, "d1") == "resting"
+
+
+def test_a_renewal_the_exchange_refuses_leaves_the_order_to_lapse(rig):
+    exchange, broker, ledger = rig
+    broker.lease_s = 900
+    broker.place("d1", "T-1", "yes", 0.40, 10, 7 * 86400)
+    ledger.execute("UPDATE orders SET expires_ts = expires_ts - 600")
+    before = ledger.one("SELECT expires_ts FROM orders")["expires_ts"]
+    next(iter(exchange.orders.values()))["status"] = "canceled"        # gone on the exchange; the ledger has not synced yet
+    assert broker.renew() == 0                                          # no exception: lapsing is the safe direction
+    assert ledger.one("SELECT expires_ts FROM orders")["expires_ts"] == before
+    assert ledger.one("SELECT kind FROM risk_events ORDER BY id DESC LIMIT 1")["kind"] == "lease_renew_failed"

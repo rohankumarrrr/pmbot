@@ -30,7 +30,7 @@ Needs Python 3.12+ and, for forecasts, the [`claude` CLI](https://claude.com/cla
 ```sh
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-python -m pytest            # 62 tests, no network
+python -m pytest            # 70 tests, no network
 ```
 
 ## Running it
@@ -51,7 +51,8 @@ pmbot resume
 - `scripts/check_consistency.py` compares the ledger with the exchange.
 - `scripts/checkin.py` prints a JSON health summary of both loops.
 - `scripts/gate1_demo_drill.py` runs seven execution drills against the demo exchange.
-- `deploy/setup_server.sh` installs the live bot as a systemd service on an Ubuntu server. It will not start without credentials.
+- `scripts/setup_subaccount.py` creates a Kalshi subaccount, funds it, and makes an API key restricted to it.
+- `deploy/setup_server.sh` installs the live bot as a systemd service on an Ubuntu server; 1 GB of memory is enough (a cycle peaks at about 500 MB). It will not start without credentials.
 
 Each forecast costs about $0.50 of Claude usage and takes about three minutes. `forecast.daily_cost_cap_usd` bounds the spend.
 
@@ -65,7 +66,7 @@ Placing orders needs a Kalshi API key, kept outside the project:
 ~/.config/pmbot/live/...               # same two files for production
 ```
 
-Create demo keys at <https://demo.kalshi.co> (Account → API Keys). For live trading, use a key restricted to a dedicated subaccount and set `kalshi.subaccount`, so the bot can never touch more than that subaccount's balance.
+Create demo keys at <https://demo.kalshi.co> (Account → API Keys). For live trading, use a key restricted to a dedicated subaccount and set `kalshi.subaccount`, so the bot can never touch more than that subaccount's balance; `scripts/setup_subaccount.py` does this.
 
 ## Layout
 

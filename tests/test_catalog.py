@@ -1,0 +1,49 @@
+"""The catalog pull: what it keeps in memory and what it writes to the ledger."""
+
+from pmbot import catalog
+from pmbot.ledger.db import Ledger
+
+
+def market(ticker: str) -> dict:
+    return {"ticker": ticker, "status": "active", "market_type": "binary", "title": f"Will {ticker} happen?",
+            "yes_bid_dollars": "0.40", "yes_ask_dollars": "0.45", "close_time": "2027-01-01T00:00:00Z",
+            "rules_primary": f"Resolves YES if {ticker}.", "rules_secondary": "Source: the agency.",
+            "price_ranges": [{"start": "0.01", "end": "0.99", "step": "0.01"}]}
+
+
+class Exchange:
+    def __init__(self, tickers):
+        self.tickers = tickers
+
+    def events(self, **_):
+        yield {"event_ticker": "S-E1", "series_ticker": "S", "title": "Event", "markets": [market(t) for t in self.tickers]}
+
+    def get(self, path, **params):
+        return {"markets": [market(t) for t in params["tickers"].split(",")]}
+
+
+SERIES = {"S": {"category": "Economics", "fee_type": "quadratic", "fee_multiplier": 1.0}}
+
+
+def test_pull_writes_each_market_once_and_keeps_rules_out_of_memory():
+    ledger = Ledger(":memory:")
+    quotes = catalog.pull_open_quotes(Exchange(["S-E1-A", "S-E1-B"]), ledger, SERIES)
+    assert [q.ticker for q in quotes] == ["S-E1-A", "S-E1-B"] and quotes[0].yes_bid == 0.40
+    assert quotes[0].rules == ""                                   # rules text is in the ledger, not on 200,000 quotes
+    assert quotes[0].price_ranges is quotes[1].price_ranges        # identical tick tables are shared
+    stored = ledger.one("SELECT rules_primary, first_seen_ts FROM markets WHERE ticker='S-E1-A'")
+    assert stored["rules_primary"] == "Resolves YES if S-E1-A."
+
+    ledger.execute("UPDATE markets SET first_seen_ts=1 WHERE ticker='S-E1-A'")
+    quotes = catalog.pull_open_quotes(Exchange(["S-E1-A", "S-E1-B", "S-E1-C"]), ledger, SERIES)   # one new listing
+    assert len(quotes) == 3
+    assert ledger.one("SELECT COUNT(*) AS n FROM markets")["n"] == 3
+    assert ledger.one("SELECT first_seen_ts FROM markets WHERE ticker='S-E1-A'")["first_seen_ts"] == 1   # not rewritten
+    assert ledger.one("SELECT COUNT(*) AS n FROM events")["n"] == 1
+
+
+def test_rules_are_fetched_for_the_markets_being_forecast():
+    exchange = Exchange(["S-E1-A"])
+    quotes = catalog.pull_open_quotes(exchange, Ledger(":memory:"), SERIES)
+    catalog.attach_rules(exchange, quotes)
+    assert quotes[0].rules == "Resolves YES if S-E1-A.\n\nSource: the agency."

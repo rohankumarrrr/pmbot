@@ -26,6 +26,7 @@ class Broker(Protocol):
     def cancel(self, client_order_id: str, reason: str) -> None: ...
     def cancel_all(self, reason: str) -> None: ...
     def sync(self) -> int: ...
+    def renew(self) -> int: ...
 
 
 def client_order_id(decision_id: str) -> str:
@@ -39,19 +40,52 @@ def book_order(side: str, price: float) -> tuple[str, float]:
 
 
 class _Base:
+    """Order leases: with `lease_s` set, an order is placed to expire after that long instead of after its
+    full lifetime, and renew() pushes the expiry forward each cycle. If the bot stops, its orders lapse on
+    the exchange within one lease instead of resting unattended at stale prices (which is how a paper
+    order was filled 11 cents through the market while the machine slept, 2026-11-18).
+    """
+
     mode: str
 
-    def __init__(self, ledger: Ledger):
-        self.ledger = ledger
+    def __init__(self, ledger: Ledger, lease_s: int | None = None):
+        self.ledger, self.lease_s = ledger, lease_s
 
     def _record(self, coid: str, decision_id: str, ticker: str, side: str, price: float, contracts: int,
-                ttl_s: int, status: str, exchange_id: str | None = None) -> None:
+                ttl_s: int, status: str, exchange_id: str | None = None) -> int:
+        """Write the order row. Returns the expiry to give the exchange."""
         stamp = now()
+        expires = stamp + (min(ttl_s, self.lease_s) if self.lease_s else ttl_s)
         self.ledger.insert("orders", {
             "client_order_id": coid, "decision_id": decision_id, "ticker": ticker, "side": side, "price": price,
             "contracts": contracts, "mode": self.mode, "status": status, "exchange_order_id": exchange_id,
-            "created_ts": stamp, "expires_ts": stamp + ttl_s, "updated_ts": stamp,
+            "created_ts": stamp, "expires_ts": expires, "updated_ts": stamp,
         })
+        if expires < stamp + ttl_s:
+            self.ledger.set_state(f"deadline:{coid}", stamp + ttl_s)     # the lease is never renewed past this
+        return expires
+
+    def _due(self) -> list[tuple]:
+        """(order row, new expiry) for resting orders whose expiry should move by a minute or more."""
+        if not self.lease_s:
+            return []
+        stamp, out = now(), []
+        for o in self._resting():
+            if o["expires_ts"] <= stamp:
+                continue            # already lapsed: sync() will mark it, and the strategy may place a fresh one
+            key = f"deadline:{o['client_order_id']}"
+            deadline = self.ledger.get_state(key)
+            if deadline is None:
+                deadline = o["expires_ts"]
+                if deadline > stamp + self.lease_s:      # placed before leases existed: bring it under one
+                    self.ledger.set_state(key, deadline)
+            target = min(stamp + self.lease_s, deadline)
+            if abs(target - o["expires_ts"]) >= 60:
+                out.append((o, int(target)))
+        return out
+
+    def _set_expiry(self, coid: str, expires: int) -> None:
+        self.ledger.execute("UPDATE orders SET expires_ts=?, updated_ts=? WHERE client_order_id=?", [expires, now(), coid])
 
     def _set_status(self, coid: str, status: str) -> None:
         self.ledger.execute("UPDATE orders SET status=?, updated_ts=? WHERE client_order_id=?", [status, now(), coid])
@@ -80,9 +114,15 @@ class ShadowBroker(_Base):
 
     mode = "shadow"
 
-    def __init__(self, ledger: Ledger, client: KalshiClient):
-        super().__init__(ledger)
+    def __init__(self, ledger: Ledger, client: KalshiClient, lease_s: int | None = None):
+        super().__init__(ledger, lease_s)
         self.client = client
+
+    def renew(self) -> int:
+        due = self._due()
+        for o, expires in due:
+            self._set_expiry(o["client_order_id"], expires)
+        return len(due)
 
     def place(self, decision_id, ticker, side, price, contracts, ttl_s, queue_ahead=0.0) -> str | None:
         coid = client_order_id(decision_id)
@@ -155,12 +195,12 @@ class KalshiBroker(_Base):
     """Real orders on Kalshi (demo or live). Post-only, so every fill is a maker fill."""
 
     def __init__(self, ledger: Ledger, client: KalshiClient, mode: str, subaccount: int | None = None,
-                 group_contracts_limit: int = 500):
+                 group_contracts_limit: int = 500, lease_s: int | None = None):
         if mode not in ("demo", "live"):
             raise ValueError(mode)
         if not client.authenticated:
             raise ValueError("KalshiBroker needs an authenticated client")
-        super().__init__(ledger)
+        super().__init__(ledger, lease_s)
         self.client, self.mode, self.subaccount = client, mode, subaccount
         self.group_contracts_limit = group_contracts_limit
 
@@ -179,11 +219,11 @@ class KalshiBroker(_Base):
             return coid
         book_side, yes_price = book_order(side, price)
         # Write the order row first: if we crash mid-request, sync() finds it by client ID.
-        self._record(coid, decision_id, ticker, side, price, contracts, ttl_s, "submitting")
+        expires = self._record(coid, decision_id, ticker, side, price, contracts, ttl_s, "submitting")
         try:
             resp = self.client.create_order(
                 ticker, book_side, contracts, yes_price, coid, post_only=True,
-                expiration_ts=now() + ttl_s, order_group_id=self.order_group(), subaccount=self.subaccount)
+                expiration_ts=expires, order_group_id=self.order_group(), subaccount=self.subaccount)
         except KalshiError as e:
             if e.code == "order_already_exists":   # an earlier attempt got through
                 self._set_status(coid, "resting")
@@ -204,6 +244,25 @@ class KalshiBroker(_Base):
                 if e.status != 404:
                     raise
         self._set_status(client_order_id, "cancelled")
+
+    def renew(self) -> int:
+        """Push each resting order's expiry forward on the exchange. A failure leaves the order to lapse,
+        which is the safe direction; sync() then records what the exchange did with it."""
+        renewed, failed = 0, []
+        for o, expires in self._due():
+            if not o["exchange_order_id"]:
+                continue
+            book_side, yes_price = book_order(o["side"], o["price"])
+            try:
+                self.client.extend_order(o["exchange_order_id"], o["ticker"], book_side, o["contracts"], yes_price, expires)
+            except KalshiError as e:
+                failed.append(f"{o['ticker']}: {e}"[:160])
+                continue
+            self._set_expiry(o["client_order_id"], expires)
+            renewed += 1
+        if failed:
+            self.ledger.risk_event("lease_renew_failed", f"{len(failed)} order(s) left to lapse; first: {failed[0]}")
+        return renewed
 
     def cancel_all(self, reason: str) -> None:
         self.client.cancel_all(self.subaccount)

@@ -15,11 +15,12 @@ The first plan had one strategy: an AI forecast blended with the market price, t
 
 ```
 every cycle (default 10 min)
-  catalog      pull every open event and market; upsert; snapshot prices
+  catalog      pull every open event and market; store new ones; snapshot prices
   sync         ingest fills (simulated from the trade tape in shadow mode); record settlements
   risk         drawdown and daily-loss checks; a breach cancels everything and halts
   upkeep       cancel forecast orders whose market moved; re-quote fresh forecasts
   rewards      accrue estimated rewards; cancel quotes that stopped earning; place new ones
+  leases       push forward the expiry of every order still wanted
   forecast     up to 2 events: screen -> research + rules check -> 5-model ensemble -> decide
 ```
 
@@ -44,7 +45,7 @@ What the bot does with them:
 - **Size.** 50 contracts a side, cut down so no quote risks more than $30. At most 60% of the bankroll in quotes and inventory, across at most 120 quotes.
 - **Inventory.** A filled side is held to settlement and not re-quoted while the position is full. The other side keeps quoting; if it fills too, the pair locks in the spread.
 - **Refusals.** If the exchange refuses an order because the book moved while it was being placed, that market is not quoted again for 6 hours.
-- **Upkeep.** A quote is cancelled when the reference price moves a tick away, the side drops below Target Size, the market stops being eligible, the price would cross, or its reward no longer covers its expected fill cost.
+- **Upkeep.** A quote is cancelled when the reference price moves two ticks away (one tick caused constant re-quoting on paper: 79% of cancels, and the hourly order cap was reached), the side drops below Target Size, the market stops being eligible, the price would cross, or its reward no longer covers its expected fill cost.
 
 In shadow mode the reward is an estimate: each cycle the bot scores the live book with its order added, and credits that share of the pool for the time since the last cycle. Fills are simulated from the trade tape with queue position. Only a live test can confirm what Kalshi actually credits.
 
@@ -69,7 +70,10 @@ The model never has tools that can place orders. Web content is untrusted, and i
 - Halt and cancel everything at a 20% drawdown from peak equity or a 5% loss in a day. A halt is cleared only by hand.
 - Order writes are never retried automatically. Every order carries a client ID derived from its decision, so a replay cannot double-submit.
 - On the exchange, all orders sit in one order group with a rolling contract limit, and are cancelled if trading pauses.
-- For live trading: a dedicated subaccount holding only the test bankroll, and an API key restricted to it.
+- **Order leases.** Every order is placed to expire 15 to 20 minutes out (`risk.order_lease_minutes`), and each cycle pushes the expiry of the orders it keeps forward, in place, without losing queue position. If the bot, its server or its network stops, the orders lapse on the exchange within one lease. Before this, a stopped bot left reward quotes resting for up to 7 days; on paper, one order was filled 11¢ through the market while the machine slept. Verified on the demo exchange by stopping the bot and watching its orders disappear.
+- Positions are valued at the midpoint of the latest book no wider than 10¢, or at cost if there has never been one. A wide book's midpoint is not a price.
+- On an exchange, equity is measured from the cash the account began with, so a restart cannot shift it.
+- For live trading: a dedicated subaccount holding only the test bankroll, and an API key that can only read and trade inside it (no transfers, no key management). `scripts/setup_subaccount.py` sets both up and can delete the key it was given for the whole account.
 
 ## Gates
 

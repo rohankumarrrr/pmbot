@@ -193,6 +193,41 @@ def test_yes_and_no_in_one_market_pair_off(ledger):
     assert p.contracts == 0 and p.cost == pytest.approx(4 + 5.5 - 10)   # locked in a 50c gain
 
 
+# --- order leases -----------------------------------------------------------
+
+class TimedTape(Tape):
+    def trades(self, min_ts=None, max_ts=None, **_):
+        from pmbot.catalog import ts
+        return iter(t for t in self._trades if min_ts <= ts(t["created_time"]) <= max_ts)
+
+
+def test_an_order_whose_lease_lapsed_takes_no_paper_fills_afterwards(ledger):
+    # The bot stopped for a while; a seller then traded through our bid. On the exchange the order was gone.
+    broker = ShadowBroker(ledger, TimedTape([trade(0.20, 50, "no", at=now() - 60)]), lease_s=1200)
+    broker.place("d1", "S-E1-A", "yes", 0.40, 10, ttl_s=7 * 86400)
+    ledger.execute("UPDATE orders SET created_ts=?, expires_ts=?", [now() - 2400, now() - 600])   # lease ran out 10 minutes ago
+    assert broker.sync() == 0 and filled(ledger) == 0
+    assert ledger.one("SELECT status FROM orders")["status"] == "expired"
+    assert broker.renew() == 0                                        # a lapsed order is not revived
+
+
+def test_a_lease_is_renewed_each_cycle_but_never_past_the_orders_lifetime(ledger):
+    broker = ShadowBroker(ledger, Tape([]), lease_s=1200)
+    broker.place("d1", "S-E1-A", "yes", 0.40, 10, ttl_s=12 * 3600)
+    expires = lambda: ledger.one("SELECT expires_ts FROM orders")["expires_ts"]
+    assert abs(expires() - (now() + 1200)) <= 2                       # 20 minutes, not 12 hours
+    ledger.execute("UPDATE orders SET expires_ts = expires_ts - 600")   # a cycle later
+    assert broker.renew() == 1 and abs(expires() - (now() + 1200)) <= 2
+    ledger.execute("UPDATE orders SET expires_ts = expires_ts - 600")
+    ledger.set_state(f"deadline:{client_order_id('d1')}", now() + 700)  # the order's own lifetime ends in ~12 minutes
+    assert broker.renew() == 1 and abs(expires() - (now() + 700)) <= 2
+    assert ShadowBroker(ledger, Tape([])).renew() == 0                # no lease configured: nothing changes
+
+    ShadowBroker(ledger, Tape([])).place("d2", "S-E1-A", "no", 0.55, 10, ttl_s=7 * 86400)   # placed before leases existed
+    assert broker.renew() == 1                                        # brought under a lease: 20 minutes, not 7 days
+    assert abs(ledger.one("SELECT expires_ts FROM orders WHERE decision_id='d2'")["expires_ts"] - (now() + 1200)) <= 2
+
+
 # --- risk -------------------------------------------------------------------
 
 def sizing(n, price=0.40):
@@ -226,6 +261,30 @@ def test_drawdown_halts(ledger, cfg):
     fill(ledger, "a", "S-E1-A", "yes", 0.50, 500)     # $250 position now marked at 5c
     risk = RiskManager(ledger, cfg, "shadow", 1000)
     assert "drawdown" in (risk.check_account() or "")
+
+
+def test_positions_are_not_marked_off_a_wide_book(ledger):
+    from pmbot.portfolio import mark_price, mark_to_market
+    fill(ledger, "a", "S-E1-A", "yes", 0.19, 100)                 # paid $19
+    ledger.insert("snapshots", {"ticker": "S-E1-A", "ts": now() - 600, "yes_bid": 0.08, "yes_ask": 0.10})
+    assert mark_price(ledger, "S-E1-A") == pytest.approx(0.09)
+    # The book thins out overnight: its midpoint (41.5c) is not a price anyone would pay.
+    ledger.insert("snapshots", {"ticker": "S-E1-A", "ts": now(), "yes_bid": 0.10, "yes_ask": 0.73})
+    assert mark_price(ledger, "S-E1-A") == pytest.approx(0.09)      # still the last tight book
+    assert mark_to_market(ledger, account(ledger, "shadow", 1000)) == pytest.approx(1000 - 19 + 9)
+    assert mark_price(ledger, "S-E1-B") is None                     # never had a usable book: carried at cost
+
+
+def test_equity_does_not_shift_when_the_bot_restarts_on_an_exchange(ledger, cfg):
+    ledger.insert("snapshots", {"ticker": "S-E1-A", "ts": now(), "yes_bid": 0.39, "yes_ask": 0.41})
+    assert RiskManager(ledger, cfg, "shadow", 100, 100).check_account() is None      # day opens at $100
+    fill(ledger, "a", "S-E1-A", "yes", 0.40, 50)                                     # $20 of cash becomes a $20 position
+    # After a restart the exchange reports $80 of cash. The $20 the ledger's fills explain is added back.
+    start_cash = 80 - account(ledger, "shadow", 0.0).cash
+    assert start_cash == pytest.approx(100)
+    assert RiskManager(ledger, cfg, "shadow", 80, start_cash).check_account() is None
+    # Measured from the balance at restart, the same account looks $20 poorer and halts.
+    assert "daily loss" in (RiskManager(ledger, cfg, "shadow", 80).check_account() or "")
 
 
 def test_config_overlay_changes_only_what_it_names():

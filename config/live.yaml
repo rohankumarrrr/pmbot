@@ -8,7 +8,7 @@ mode: live
 ledger_path: data/ledger_live.sqlite
 
 kalshi:
-  subaccount:                   # set to the subaccount number if the key is restricted to one
+  subaccount: 1                 # the key is restricted to this subaccount; it cannot see or move anything else
 
 trading:
   max_fraction_per_market: 0.05   # $5 of a $100 bankroll
@@ -23,3 +23,4 @@ risk:
   daily_loss_limit: 0.10          # $10 a day on $100; the 5% default would trip on a single filled quote
   max_open_orders: 40
   max_orders_per_hour: 60
+  order_lease_minutes: 15         # if the bot stops, every order lapses on the exchange within 15 minutes

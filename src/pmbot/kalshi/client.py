@@ -64,6 +64,9 @@ class KalshiClient:
     ):
         self.base_url = base_url.rstrip("/")
         self.key_id = key_id
+        # Set when the key is restricted to one subaccount: every portfolio read then names it, because
+        # the exchange otherwise answers for the primary account (balance, positions) or all of them.
+        self.subaccount: int | None = None
         self._key = (
             serialization.load_pem_private_key(private_key_pem, password=None)
             if private_key_pem
@@ -208,20 +211,25 @@ class KalshiClient:
 
     # --- portfolio (signed) ------------------------------------------------
 
+    def _own(self, params: dict) -> dict:
+        if self.subaccount is not None:
+            params.setdefault("subaccount", self.subaccount)
+        return params
+
     def balance(self) -> dict:
-        return self.get("/portfolio/balance", auth=True)
+        return self.get("/portfolio/balance", auth=True, **self._own({}))
 
     def positions(self, **params) -> Iterator[dict]:
-        return self.paginate("/portfolio/positions", "market_positions", auth=True, **params)
+        return self.paginate("/portfolio/positions", "market_positions", auth=True, **self._own(params))
 
     def orders(self, **params) -> Iterator[dict]:
-        return self.paginate("/portfolio/orders", "orders", auth=True, **params)
+        return self.paginate("/portfolio/orders", "orders", auth=True, **self._own(params))
 
     def fills(self, **params) -> Iterator[dict]:
-        return self.paginate("/portfolio/fills", "fills", auth=True, **params)
+        return self.paginate("/portfolio/fills", "fills", auth=True, **self._own(params))
 
     def settlements(self, **params) -> Iterator[dict]:
-        return self.paginate("/portfolio/settlements", "settlements", auth=True, **params)
+        return self.paginate("/portfolio/settlements", "settlements", auth=True, **self._own(params))
 
     # --- orders (signed, V2) -----------------------------------------------
 
@@ -261,6 +269,11 @@ class KalshiClient:
         if subaccount is not None:
             body["subaccount"] = subaccount
         return self.request("POST", "/portfolio/events/orders", json=body, auth=True, retry=False)
+
+    def extend_order(self, order_id: str, ticker: str, side: str, count: float, price: float, expiration_ts: int) -> dict:
+        """Move an order's expiry. Price and total size are resent unchanged, which keeps its queue position."""
+        body = {"ticker": ticker, "side": side, "count": f"{count:.2f}", "price": f"{price:.4f}", "expiration_time": expiration_ts}
+        return self.request("POST", f"/portfolio/events/orders/{order_id}/amend", json=body, auth=True, retry=False)
 
     def cancel_order(self, order_id: str) -> Any:
         return self.request("DELETE", f"/portfolio/events/orders/{order_id}", auth=True)

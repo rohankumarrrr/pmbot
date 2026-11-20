@@ -75,14 +75,26 @@ def account(ledger: Ledger, mode: str, start: float) -> Account:
     )
 
 
+MAX_MARK_SPREAD = 0.10   # dollars. A wider book says little about value: its midpoint moves with whoever quotes last.
+
+
+def mark_price(ledger: Ledger, ticker: str) -> float | None:
+    """What a YES contract is worth: the midpoint of the latest snapshot with a two-sided book no wider
+    than MAX_MARK_SPREAD. None if there has never been one.
+
+    A thin overnight book of 10c bid / 73c ask once marked an 8c position at 41c, which inflated equity
+    by $49 and would have set a false daily-loss halt when the book tightened again.
+    """
+    snap = ledger.one(
+        "SELECT yes_bid, yes_ask FROM snapshots WHERE ticker=? AND yes_ask > yes_bid AND yes_ask - yes_bid <= ? "
+        "ORDER BY ts DESC LIMIT 1", [ticker, MAX_MARK_SPREAD + 1e-9])
+    return (snap["yes_bid"] + snap["yes_ask"]) / 2 if snap else None
+
+
 def mark_to_market(ledger: Ledger, acct: Account) -> float:
-    """Equity with open positions valued at the latest snapshot mid."""
+    """Equity with open positions valued by mark_price, or at cost where there is no usable price."""
     value = 0.0
     for p in acct.open_positions:
-        snap = ledger.one("SELECT yes_bid, yes_ask FROM snapshots WHERE ticker=? ORDER BY ts DESC LIMIT 1", [p.ticker])
-        if snap and snap["yes_ask"] and snap["yes_ask"] > snap["yes_bid"]:
-            mid = (snap["yes_bid"] + snap["yes_ask"]) / 2
-            value += p.contracts * (mid if p.side == "yes" else 1 - mid)
-        else:
-            value += p.cost
+        mid = mark_price(ledger, p.ticker)
+        value += p.contracts * (mid if p.side == "yes" else 1 - mid) if mid is not None else p.cost
     return acct.cash + value

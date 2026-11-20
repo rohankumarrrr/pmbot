@@ -71,7 +71,7 @@ lp:   # liquidity provision in markets that pay Kalshi liquidity rewards
   max_day_move: 0.08            # skip markets whose price moved more than this in a day
   max_volume_24h: 2000          # contracts; busier markets mean more fills per reward dollar
   reject_cooldown_hours: 6      # after the exchange refuses an order in a market, do not quote it for this long
-  requote_ticks: 1              # move an order when the reference price is this many ticks away
+  requote_ticks: 2              # move an order when the reference price is this many ticks away (1 caused constant re-quoting: 79% of cancels on 2026-11-17)
   refresh_programs_minutes: 60
 
 risk:
@@ -80,3 +80,4 @@ risk:
   max_open_orders: 120
   max_orders_per_hour: 90
   order_group_contracts_limit: 500
+  order_lease_minutes: 20       # orders expire this long after the bot last renewed them (every cycle); 0 = no leases
