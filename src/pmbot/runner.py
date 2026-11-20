@@ -60,6 +60,9 @@ class Runner:
         bankroll = self.bankroll()
         # Equity is measured from the cash the account began with: the balance now, less what the ledger's fills explain.
         start_cash = bankroll - account(self.ledger, self.mode, 0.0).cash if self.mode in ("demo", "live") else bankroll
+        if self.mode in ("demo", "live") and self.ledger.get_state(f"initial_cash:{self.mode}") is None:
+            # Remembered once, so that cash the fills do not explain (credited rewards) can be measured later.
+            self.ledger.set_state(f"initial_cash:{self.mode}", start_cash)
         self.risk = RiskManager(self.ledger, cfg, self.mode, bankroll, start_cash)
         self.lp = LiquidityProvider(cfg, self.ledger, self.data, self.broker, self.risk, self.mode) if cfg.lp.enabled else None
         self.rng = random.Random()

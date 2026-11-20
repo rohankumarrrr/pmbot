@@ -1,11 +1,13 @@
-"""Gather the state of both bots for a scheduled check-in. Prints JSON; changes nothing except
+"""Gather the state of the bots for a scheduled check-in. Prints JSON; changes nothing except
 its own bookmark of when it last ran (data/checkin_state.json).
 
-Usage: python scripts/checkin.py
+Usage: python scripts/checkin.py            # paper and demo, on the machine that runs them
+       python scripts/checkin.py live       # the live bot, on its server
 """
 
 import json
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -16,7 +18,9 @@ from pmbot.score import lp_report, report
 BOTS = {
     "paper": {"config": "config/settings.yaml", "log": "logs/bot.log", "process": "pmbot cycle --every 600", "interval_s": 600},
     "demo": {"config": "config/demo.yaml", "log": "logs/demo.log", "process": "pmbot cycle --every 300", "interval_s": 300},
+    "live": {"config": "config/live.yaml", "log": "logs/live.log", "process": "pmbot cycle --every 300", "interval_s": 300},
 }
+WANTED = sys.argv[1:] or ["paper", "demo"]
 STATE = Path("data/checkin_state.json")
 now = int(time.time())
 since = json.loads(STATE.read_text())["ts"] if STATE.exists() else now - 6 * 3600
@@ -27,7 +31,8 @@ def running(pattern: str) -> bool:
 
 
 out = {"checked_at": time.strftime("%Y-%m-%d %H:%M %Z"), "hours_since_last_checkin": round((now - since) / 3600, 1), "bots": {}}
-for name, bot in BOTS.items():
+for name in WANTED:
+    bot = BOTS[name]
     cfg = config.load(bot["config"])
     ledger = Ledger(cfg.ledger_path)
     mode = cfg.mode
@@ -76,6 +81,18 @@ for name, bot in BOTS.items():
             live = check(ledger, client, mode)
             info["exchange_check_now"] = {"ok": live.ok, "summary": live.summary()}
             info["exchange_balance"] = client.balance().get("balance_dollars")
+            # Cash the ledger's fills and settlements do not explain. With no deposits or withdrawals,
+            # that is what the exchange has credited (liquidity rewards) since the bot first started.
+            from pmbot.portfolio import account, mark_to_market
+            implied_start = float(info["exchange_balance"]) - account(ledger, mode, 0.0).cash
+            acct, initial = account(ledger, mode, implied_start), ledger.get_state(f"initial_cash:{mode}")
+            info["money"] = {
+                "initial_cash": initial, "cash_now": round(acct.cash, 4), "open_positions": len(acct.open_positions),
+                "positions_cost": round(acct.open_cost, 4), "equity_marked": round(mark_to_market(ledger, acct), 4),
+                "realized_trading_pnl": round(acct.realized, 4),
+                "credited_cash_not_from_trading": round(implied_start - initial, 4) if initial is not None else None,
+            }
+            info["reward_strategy"] = lp_report(ledger, mode)
         except Exception as e:
             info["exchange_check_now"] = {"ok": None, "error": repr(e)[:300]}
     out["bots"][name] = info
