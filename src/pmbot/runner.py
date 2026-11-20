@@ -41,6 +41,19 @@ def trading_client(cfg: Config) -> KalshiClient:
     return client
 
 
+def exchange_basis(ledger: Ledger, mode: str, cash: float) -> tuple[float, float]:
+    """(bankroll, starting cash) for an exchange account holding `cash` right now.
+
+    Bankroll, which sizes orders and scales the loss limits, is cash plus open positions at cost: what
+    the account holds, not just its idle cash. Idle cash alone shrinks every time a quote fills, so a
+    restart after $23 of fills cut the live bot's $10 daily-loss limit to $7.69 and halted it at a loss
+    of $8.88 (2026-11-20). Starting cash is the balance less what the ledger's fills explain; equity is
+    measured from it.
+    """
+    traded = account(ledger, mode, 0.0)
+    return cash + traded.open_cost, cash - traded.cash
+
+
 class Runner:
     def __init__(self, cfg: Config, ledger: Ledger | None = None, market_data: KalshiClient | None = None,
                  broker: Broker | None = None, forecaster: Forecaster | None = None):
@@ -57,9 +70,7 @@ class Runner:
             self.broker = KalshiBroker(self.ledger, trading_client(cfg), self.mode, cfg.kalshi.subaccount,
                                        cfg.risk.order_group_contracts_limit, lease_s)
         self.forecaster = forecaster or Forecaster(config=dict(cfg.forecast))
-        bankroll = self.bankroll()
-        # Equity is measured from the cash the account began with: the balance now, less what the ledger's fills explain.
-        start_cash = bankroll - account(self.ledger, self.mode, 0.0).cash if self.mode in ("demo", "live") else bankroll
+        bankroll, start_cash = self.account_basis()
         if self.mode in ("demo", "live") and self.ledger.get_state(f"initial_cash:{self.mode}") is None:
             # Remembered once, so that cash the fills do not explain (credited rewards) can be measured later.
             self.ledger.set_state(f"initial_cash:{self.mode}", start_cash)
@@ -67,10 +78,11 @@ class Runner:
         self.lp = LiquidityProvider(cfg, self.ledger, self.data, self.broker, self.risk, self.mode) if cfg.lp.enabled else None
         self.rng = random.Random()
 
-    def bankroll(self) -> float:
-        if self.mode in ("demo", "live"):
-            return float(self.broker.client.balance()["balance_dollars"])
-        return float(self.cfg.bankroll_usd)
+    def account_basis(self) -> tuple[float, float]:
+        """(bankroll, starting cash). On paper both are the configured bankroll."""
+        if self.mode not in ("demo", "live"):
+            return float(self.cfg.bankroll_usd), float(self.cfg.bankroll_usd)
+        return exchange_basis(self.ledger, self.mode, float(self.broker.client.balance()["balance_dollars"]))
 
     def record_equity(self) -> None:
         """One point per cycle for the dashboard: cash, positions, equity, rewards estimated and credited."""

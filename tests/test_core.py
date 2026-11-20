@@ -287,6 +287,14 @@ def test_equity_does_not_shift_when_the_bot_restarts_on_an_exchange(ledger, cfg)
     assert "daily loss" in (RiskManager(ledger, cfg, "shadow", 80).check_account() or "")
 
 
+def test_bankroll_on_an_exchange_counts_open_positions_not_just_idle_cash(ledger, cfg):
+    from pmbot.runner import exchange_basis
+    assert exchange_basis(ledger, "shadow", 100.0) == (100.0, 100.0)
+    fill(ledger, "a", "S-E1-A", "yes", 0.40, 50)              # $20 of the $100 becomes a position
+    bankroll, start_cash = exchange_basis(ledger, "shadow", 80.0)
+    assert (bankroll, start_cash) == (pytest.approx(100.0), pytest.approx(100.0))   # limits still scale to $100, not $80
+
+
 def test_config_overlay_changes_only_what_it_names():
     demo, base = config.load("config/demo.yaml"), config.load("config/settings.yaml")
     assert demo.mode == "demo" and base.mode == "shadow"
