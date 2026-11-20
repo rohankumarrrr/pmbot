@@ -219,7 +219,7 @@ def market_reasons(prog: Program, q: Quote, lp, now: float) -> list[str]:
         out.append("category_excluded")
     if q.fee_type != "quadratic":
         out.append("maker_fee_series")          # a maker fee would come out of every fill
-    if not q.close_ts or (q.close_ts - now) / 3600 < lp.min_hours_to_close:
+    if not q.decides_ts or (q.decides_ts - now) / 3600 < lp.min_hours_to_close:
         out.append("closes_too_soon")           # the final stretch is when informed flow arrives
     if (prog.end_ts - now) / 3600 < lp.min_hours_left_in_program:
         out.append("program_ending")

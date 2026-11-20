@@ -53,6 +53,14 @@ class Quote:
         return 0.01
 
     @property
+    def decides_ts(self) -> int | None:
+        """When the outcome is expected to be known: the earlier of the close and the expected expiration.
+        Daily markets can stay open a week past the day that decides them; the close alone hid that, and
+        the live bot bid on gas-price buckets whose answer was hours away (2026-11-20)."""
+        times = [t for t in (self.close_ts, self.expected_expiration_ts) if t]
+        return min(times) if times else None
+
+    @property
     def two_sided(self) -> bool:
         return 0.0 < self.yes_bid < self.yes_ask < 1.0
 
