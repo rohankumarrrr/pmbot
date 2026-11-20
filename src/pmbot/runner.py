@@ -16,7 +16,7 @@ from .kalshi.fees import fee_per_contract
 from .ledger.db import Ledger, new_id, now
 from .llm.pipeline import PIPELINE_VERSION, EventForecast, Forecaster
 from .lp_runner import LiquidityProvider
-from .portfolio import account
+from .portfolio import account, mark_to_market
 from .risk import RiskManager
 from .universe import Candidate, candidates
 
@@ -72,6 +72,27 @@ class Runner:
             return float(self.broker.client.balance()["balance_dollars"])
         return float(self.cfg.bankroll_usd)
 
+    def record_equity(self) -> None:
+        """One point per cycle for the dashboard: cash, positions, equity, rewards estimated and credited."""
+        start, credited = self.risk.start_cash, None
+        if self.mode in ("demo", "live"):
+            # Read the cash now, so rewards the exchange has credited since the start show up.
+            start = float(self.broker.client.balance()["balance_dollars"]) - account(self.ledger, self.mode, 0.0).cash
+            initial = self.ledger.get_state(f"initial_cash:{self.mode}")
+            credited = start - initial if initial is not None else None
+        acct = account(self.ledger, self.mode, start)
+        equity = mark_to_market(self.ledger, acct)
+        one = lambda sql: self.ledger.one(sql, [self.mode])["v"]
+        self.ledger.insert("equity_history", {
+            "mode": self.mode, "ts": now(), "cash": acct.cash, "positions_value": equity - acct.cash, "equity": equity,
+            "resting_at_risk": one(
+                "SELECT COALESCE(SUM(o.price * (o.contracts - COALESCE((SELECT SUM(f.contracts) FROM fills f "
+                "WHERE f.client_order_id = o.client_order_id), 0))), 0) AS v FROM orders o "
+                "WHERE o.mode=? AND o.status IN ('resting','partial')"),
+            "estimated_rewards": one("SELECT COALESCE(SUM(usd), 0) AS v FROM lp_accruals WHERE mode=?"),
+            "credited": credited,
+        }, replace=True)
+
     # --- the cycle ---------------------------------------------------------
 
     def cycle(self, forecast: bool = True) -> dict:
@@ -96,6 +117,11 @@ class Runner:
             stats["consistency"] = report.summary()
             if must_halt and not self.risk.halted:
                 self.risk.halt(f"ledger and exchange disagree two cycles running: {report.summary()}")
+
+        try:
+            self.record_equity()
+        except Exception as e:      # bookkeeping for the dashboard must never stop a trading cycle
+            log("equity point not recorded:", repr(e)[:200])
 
         halted = self.risk.check_account()
         if halted:

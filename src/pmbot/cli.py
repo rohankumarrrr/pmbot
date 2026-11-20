@@ -74,6 +74,11 @@ def cmd_status(args, cfg) -> None:
     }, indent=2))
 
 
+def cmd_dashboard(args, cfg) -> None:
+    from .dashboard import write
+    print(write(Ledger(cfg.ledger_path), cfg, args.out))
+
+
 def cmd_halt(args, cfg) -> None:
     from .runner import Runner
     runner = Runner(cfg)
@@ -109,6 +114,9 @@ def main() -> None:
     sub.add_parser("score", help="score resolved forecasts and check gate 0").set_defaults(fn=cmd_score)
     sub.add_parser("lp", help="liquidity-reward strategy: estimated rewards vs fill costs").set_defaults(fn=cmd_lp)
     sub.add_parser("status", help="account, orders and risk state").set_defaults(fn=cmd_status)
+    d = sub.add_parser("dashboard", help="write a one-page HTML view of the account")
+    d.add_argument("--out", default="data/dashboard.html")
+    d.set_defaults(fn=cmd_dashboard)
     h = sub.add_parser("halt", help="kill switch: stop trading and cancel everything")
     h.add_argument("reason", nargs="?", default="manual")
     h.set_defaults(fn=cmd_halt)

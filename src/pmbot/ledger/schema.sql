@@ -179,3 +179,16 @@ CREATE TABLE IF NOT EXISTS kv (
     key    TEXT PRIMARY KEY,
     value  TEXT
 );
+
+-- One row per cycle: what the account was worth. Feeds the dashboard's charts.
+CREATE TABLE IF NOT EXISTS equity_history (
+    mode              TEXT NOT NULL,
+    ts                INTEGER NOT NULL,
+    cash              REAL,
+    positions_value   REAL,      -- open positions at mark_price, or cost where there is no usable price
+    equity            REAL,      -- cash + positions_value
+    resting_at_risk   REAL,      -- dollars in unfilled resting orders
+    estimated_rewards REAL,      -- cumulative, the bot's own estimate
+    credited          REAL,      -- cumulative cash the exchange credited that trading does not explain; NULL on paper
+    PRIMARY KEY (mode, ts)
+) WITHOUT ROWID;

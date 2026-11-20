@@ -30,7 +30,7 @@ Needs Python 3.12+ and, for forecasts, the [`claude` CLI](https://claude.com/cla
 ```sh
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-python -m pytest            # 70 tests, no network
+python -m pytest            # 72 tests, no network
 ```
 
 ## Running it
@@ -42,12 +42,14 @@ pmbot cycle --no-forecast   # reward quotes only; no model calls
 pmbot status                # cash, positions, resting orders, halts
 pmbot score                 # forecasts vs the market, and the gate 0 verdict
 pmbot lp                    # reward-strategy report
+pmbot dashboard             # write data/dashboard.html: equity, positions, quotes, fills, rewards
 pmbot universe              # events the forecaster would consider
 pmbot halt "reason"         # kill switch: cancel everything and stop
 pmbot resume
 ```
 
 - `scripts/run_bot.sh` runs the paper loop and `scripts/run_bot.sh demo` the demo loop. Both log to `logs/` and keep a Mac from idle-sleeping while they run.
+- `scripts/dashboard.sh [paper|demo|live]` builds the dashboard page and opens it. Kalshi's site does not show subaccounts, so this is the live account's portfolio screen.
 - `scripts/check_consistency.py` compares the ledger with the exchange.
 - `scripts/checkin.py` prints a JSON health summary of both loops.
 - `scripts/gate1_demo_drill.py` runs seven execution drills against the demo exchange.
