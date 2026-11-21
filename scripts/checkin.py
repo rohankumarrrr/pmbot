@@ -1,7 +1,7 @@
 """Gather the state of the bots for a scheduled check-in. Prints JSON; changes nothing except
 its own bookmark of when it last ran (data/checkin_state.json).
 
-Usage: python scripts/checkin.py            # paper and demo, on the machine that runs them
+Usage: python scripts/checkin.py            # paper, demo and the twin, on the machine that runs them
        python scripts/checkin.py live       # the live bot, on its server
 """
 
@@ -21,7 +21,7 @@ BOTS = {
     "twin": {"config": "config/twin.yaml", "log": "logs/twin.log", "process": "pmbot cycle --every 240", "interval_s": 240},
     "live": {"config": "config/live.yaml", "log": "logs/live.log", "process": "pmbot cycle --every 300", "interval_s": 300},
 }
-WANTED = sys.argv[1:] or ["paper", "demo"]
+WANTED = sys.argv[1:] or ["paper", "demo", "twin"]
 STATE = Path("data/checkin_state.json")
 now = int(time.time())
 since = json.loads(STATE.read_text())["ts"] if STATE.exists() else now - 6 * 3600
