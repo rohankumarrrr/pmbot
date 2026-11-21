@@ -93,6 +93,7 @@ def test_eligibility_filters():
     ok = quote(close_ts=far)
     assert lp.market_reasons(program(end_ts=far), ok, cfg.lp, now) == []
     assert "closes_too_soon" in lp.market_reasons(program(end_ts=far), quote(close_ts=now + 3600), cfg.lp, now)
+    assert "other_exchange_shard" in lp.market_reasons(program(end_ts=far), quote(close_ts=far, exchange_index=2), cfg.lp, now)
     # Open for another week, but the number that decides it is published in 20 hours.
     deciding = quote(close_ts=now + 7 * 86400, expected_expiration_ts=now + 20 * 3600)
     assert "closes_too_soon" in lp.market_reasons(program(end_ts=far), deciding, cfg.lp, now)

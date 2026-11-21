@@ -217,6 +217,8 @@ def market_reasons(prog: Program, q: Quote, lp, now: float) -> list[str]:
     out = []
     if q.category in lp.exclude_categories:
         out.append("category_excluded")
+    if q.exchange_index not in lp.get("exchange_indexes", [0]):
+        out.append("other_exchange_shard")      # the account holds no cash there, so the order would be refused
     if q.fee_type != "quadratic":
         out.append("maker_fee_series")          # a maker fee would come out of every fill
     if not q.decides_ts or (q.decides_ts - now) / 3600 < lp.min_hours_to_close:

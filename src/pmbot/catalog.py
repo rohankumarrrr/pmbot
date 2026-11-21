@@ -44,6 +44,7 @@ class Quote:
     rules: str               # empty after the catalog pull; attach_rules() fills it for the few markets being forecast
     price_ranges: list[tuple[float, float, float]] = field(default_factory=list)   # (start, end, step)
     previous_price: float = 0.0    # last trade price a day earlier; 0 if none
+    exchange_index: int = 0        # Kalshi keeps a separate cash balance per exchange shard; 0 is the default one
 
     def tick(self, price: float) -> float:
         """Minimum price increment at this price level."""
@@ -158,6 +159,7 @@ def pull_open_quotes(client: KalshiClient, ledger: Ledger, series: dict[str, dic
                 can_close_early=bool(m.get("can_close_early")), rules="",
                 price_ranges=shared_ranges.setdefault(ranges, list(ranges)),
                 previous_price=dollars(m.get("previous_price_dollars")),
+                exchange_index=int(m.get("exchange_index") or 0),
             )
             quotes.append(q)
             if q.ticker in known_markets:
