@@ -47,3 +47,24 @@ def test_rules_are_fetched_for_the_markets_being_forecast():
     quotes = catalog.pull_open_quotes(exchange, Ledger(":memory:"), SERIES)
     catalog.attach_rules(exchange, quotes)
     assert quotes[0].rules == "Resolves YES if S-E1-A.\n\nSource: the agency."
+
+
+def test_day_ago_price_falls_back_to_that_days_book_when_nothing_traded():
+    assert catalog.day_ago_price({"previous_price_dollars": "0.3100", "previous_yes_bid_dollars": "0.5000", "previous_yes_ask_dollars": "0.9500"}) == 0.31
+    assert catalog.day_ago_price({"previous_price_dollars": "0.0000", "previous_yes_bid_dollars": "0.5000", "previous_yes_ask_dollars": "0.9500"}) == 0.725
+    assert catalog.day_ago_price({"previous_price_dollars": "0.0000", "previous_yes_bid_dollars": "0.0000", "previous_yes_ask_dollars": "0.9900"}) == 0.0   # no book either
+
+
+def test_a_market_that_fell_from_its_day_ago_book_counts_as_moving():
+    from pmbot import config, lp
+    cfg, now = config.load("config/settings.yaml"), 1_000_000
+    m = {**market("S-E1-A"), "yes_bid_dollars": "0.29", "yes_ask_dollars": "0.50", "close_time": "2027-01-01T00:00:00Z",
+         "previous_price_dollars": "0.0000", "previous_yes_bid_dollars": "0.5000", "previous_yes_ask_dollars": "0.9500"}
+
+    class One(Exchange):
+        def events(self, **_):
+            yield {"event_ticker": "S-E1", "series_ticker": "S", "title": "Event", "markets": [m]}
+
+    (q,) = catalog.pull_open_quotes(One([]), Ledger(":memory:"), SERIES)
+    prog = lp.Program("S-E1-A", "S", 10.0, 1000, 0.5, 0, now + 30 * 86400)
+    assert "price_moving" in lp.market_reasons(prog, q, cfg.lp, now)

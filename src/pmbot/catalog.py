@@ -74,6 +74,21 @@ class Quote:
         return self.yes_ask - self.yes_bid
 
 
+def day_ago_price(m: dict) -> float:
+    """What the market was worth a day earlier: the last trade then, or with no trade the midpoint of that
+    day's two-sided book. 0 if neither exists.
+
+    Thin markets often have no trade a day back. Reading that as "no price to compare" left the
+    moving-price filter blind exactly where prices jump: the live bot bid 29c on a contract whose book
+    had been 50c/95c a day earlier and was 2c/5c within the hour (2026-11-20).
+    """
+    last = dollars(m.get("previous_price_dollars"))
+    if last > 0:
+        return last
+    bid, ask = dollars(m.get("previous_yes_bid_dollars")), dollars(m.get("previous_yes_ask_dollars"))
+    return (bid + ask) / 2 if 0 < bid < ask < 1 else 0.0
+
+
 def rules_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
@@ -158,7 +173,7 @@ def pull_open_quotes(client: KalshiClient, ledger: Ledger, series: dict[str, dic
                 expected_expiration_ts=ts(m.get("expected_expiration_time")),
                 can_close_early=bool(m.get("can_close_early")), rules="",
                 price_ranges=shared_ranges.setdefault(ranges, list(ranges)),
-                previous_price=dollars(m.get("previous_price_dollars")),
+                previous_price=day_ago_price(m),
                 exchange_index=int(m.get("exchange_index") or 0),
             )
             quotes.append(q)
