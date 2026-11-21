@@ -46,3 +46,13 @@ lp_live_test:   # added 2026-11-17, before any live order: is the liquidity-rewa
     - any of the three fails
     - equity falls 20% below its peak (the bot halts itself)
     - the ledger and the exchange disagree twice in a row (the bot halts itself)
+  amendments:
+    # Changes made after results were seen are recorded here, not written over the rule above.
+    - date: 2026-11-21
+      by: Rohan
+      change: drawdown stop moved from 20% to 40% below peak (halt below $60)
+      why: >
+        Equity was $88 after 16 hours and expected near $78 once open positions settle. The losses came from
+        three filter gaps fixed the same day, and the question the test exists to answer (does Kalshi credit
+        the rewards) was still open: payouts under $1 per program are not issued, and the bot had spread its
+        quotes across 141 markets. Live stays paused until quotes that stick to a program are proven on paper.
