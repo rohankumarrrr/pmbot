@@ -73,6 +73,14 @@ class LiquidityProvider:
         self.ledger.set_state(f"lp_last_step:{self.mode}", stamp)
         return stats
 
+    def committed(self, programs: dict[str, lp.Program]) -> set[str]:
+        """Markets where an order of ours has rested during the program's current period."""
+        rows = self.ledger.query(
+            "SELECT o.ticker, MAX(o.created_ts) AS t FROM orders o JOIN decisions d ON d.id = o.decision_id "
+            "WHERE o.mode=? AND d.strategy='lp' AND o.status != 'rejected' AND o.created_ts>? GROUP BY o.ticker",
+            [self.mode, now() - 8 * DAY])
+        return {r["ticker"] for r in rows if r["ticker"] in programs and r["t"] >= programs[r["ticker"]].start_ts}
+
     def accrued(self, programs: dict[str, lp.Program]) -> dict[str, float]:
         """Estimated dollars already earned in each program's current period, by ticker."""
         out: dict[str, float] = {}
@@ -192,12 +200,13 @@ class LiquidityProvider:
         cooling = {r["ticker"] for r in self.ledger.query(
             "SELECT DISTINCT ticker FROM orders WHERE mode=? AND status='rejected' AND created_ts>?",
             [self.mode, now() - self.c.get("reject_cooldown_hours", 6) * 3600])}
-        ranked = lp.rank(programs, by_ticker, books, self.c, self.risk.bankroll, stamp, self.earned)
-        # Stay where rewards are already building: a program pays only once the account's share reaches $1,
-        # so moving to whichever market ranks best this cycle throws away what was earned in the last one.
-        # (The sort is stable: programs with nothing earned yet keep their net-yield order.)
-        sticky = self.c.get("sticky_min_accrued", 0.05)
-        ranked.sort(key=lambda s: -(self.earned.get(s.ticker, 0.0) if self.earned.get(s.ticker, 0.0) >= sticky else 0.0))
+        # Stay where the account has already quoted this period: a program pays only once its share reaches
+        # $1, so handing a slot to whichever market ranks best this cycle throws away what the last one earned.
+        # A quote pulled because its reference moved comes straight back here at the new reference.
+        committed = self.committed(programs)
+        ranked = lp.rank(programs, by_ticker, books, self.c, self.risk.bankroll, stamp, self.earned, committed)
+        # Stable sort: markets not yet quoted keep their net-yield order, after the committed ones.
+        ranked.sort(key=lambda s: (s.ticker not in committed, -self.earned.get(s.ticker, 0.0)))
         for sq in ranked:
             if slots <= 0 or at_risk >= budget:
                 break

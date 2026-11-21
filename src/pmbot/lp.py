@@ -236,12 +236,15 @@ MIN_PAYOUT = 1.0     # Kalshi issues no payout under $1 for a program's period
 
 
 def rank(programs: dict[str, Program], quotes: dict[str, Quote], books: dict[str, tuple[Levels, Levels]],
-         lp, bankroll: float, now: float, accrued: dict[str, float] | None = None) -> list[SideQuote]:
+         lp, bankroll: float, now: float, accrued: dict[str, float] | None = None,
+         committed: set[str] | None = None) -> list[SideQuote]:
     """Every eligible side quote, best net yield (reward less expected fill cost) per dollar at risk first.
 
     `accrued` is what the account has already earned (estimated) in each program's current period.
+    `committed` are markets already quoted this period: they only have to reach the payout floor itself,
+    while a new market has to clear it with a margin.
     """
-    accrued = accrued or {}
+    accrued, committed = accrued or {}, committed or set()
     out: list[SideQuote] = []
     for ticker, prog in programs.items():
         q, book = quotes.get(ticker), books.get(ticker)
@@ -261,7 +264,8 @@ def rank(programs: dict[str, Program], quotes: dict[str, Quote], books: dict[str
             # A program pays nothing below $1 for the period: what is already earned there plus what this
             # quote would add by the end has to clear it, with a margin.
             days_left = max((prog.end_ts - now) / DAY, 0)
-            if accrued.get(ticker, 0.0) + sq.reward_day * days_left < lp.min_expected_payout:
+            floor = MIN_PAYOUT if ticker in committed else lp.min_expected_payout
+            if accrued.get(ticker, 0.0) + sq.reward_day * days_left < floor:
                 continue
             if sq.net_yield_day(lp) >= lp.min_yield_day:
                 out.append(sq)

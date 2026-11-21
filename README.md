@@ -30,7 +30,7 @@ Needs Python 3.12+ and, for forecasts, the [`claude` CLI](https://claude.com/cla
 ```sh
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-python -m pytest            # 79 tests, no network
+python -m pytest            # 80 tests, no network
 ```
 
 ## Running it

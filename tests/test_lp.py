@@ -185,14 +185,27 @@ def test_a_program_too_small_to_pay_is_quoted_only_if_earnings_there_already_clo
     assert [s.side for s in lp.rank(*args, accrued={"T-1": 1.30})] == ["no"]   # the cheap YES bid still fails on fill cost
 
 
-def test_new_quotes_go_first_to_programs_already_earning():
+def test_a_market_quoted_this_period_keeps_its_slot_when_its_quotes_are_pulled():
     provider, ledger = sticky_provider(max_quotes=2)
-    programs = {"T-1": program(), "T-2": program(ticker="T-2", reward_day=50.0)}      # T-1 pays twice as much
+    only_t2 = {"T-2": program(ticker="T-2", reward_day=50.0)}
     quotes = {"T-1": quote(), "T-2": quote(ticker="T-2")}
     books = {"T-1": (YES, NO), "T-2": (YES, NO)}
-    provider.earned = {"T-2": 0.40}                                     # but 40c is already earned in T-2 this period
-    assert provider.place(programs, quotes, books, 0.0) == 2
-    assert {r["ticker"] for r in ledger.query("SELECT ticker FROM orders")} == {"T-2"}
+    assert provider.place(only_t2, quotes, books, 0.0) == 2             # the bot starts in T-2
+    for o in provider.my_orders():
+        provider.broker.cancel(o["client_order_id"], "reference_moved")  # its reference moves and both quotes are pulled
+    both = {**only_t2, "T-1": program()}                                 # T-1 now pays twice as much
+    assert provider.committed(both) == {"T-2"}
+    assert provider.place(both, quotes, books, 0.0) == 2
+    resting = ledger.query("SELECT ticker FROM orders WHERE status='resting'")
+    assert {r["ticker"] for r in resting} == {"T-2"}                    # back into T-2, not off to the better-ranked T-1
+
+
+def test_a_committed_market_only_has_to_reach_the_floor_itself():
+    cfg, now = config.load("config/settings.yaml"), 1_000_000
+    small = {"T-1": program(reward_day=10.0, end_ts=now + 86400)}       # a quote there adds about 36c by the end
+    args = (small, {"T-1": quote()}, {"T-1": (YES, NO)}, cfg.lp, 1000.0, now)
+    assert lp.rank(*args, accrued={"T-1": 0.80}) == []                  # new market: 1.16 is under the 1.50 margin
+    assert [s.side for s in lp.rank(*args, accrued={"T-1": 0.80}, committed={"T-1"})] == ["no"]   # already there: 1.16 clears $1
 
 
 def test_a_quote_that_can_no_longer_reach_the_payout_floor_is_pulled():
