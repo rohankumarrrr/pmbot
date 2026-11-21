@@ -73,7 +73,7 @@ for name in WANTED:
         score = report(ledger, mode)
         info["forecasts"] = {k: score.get(k) for k in ("resolved_events", "target_events", "forecast_runs", "brier",
                                                         "confirmation_half", "simulated_pnl", "price_correction_baseline", "gate0")}
-    else:
+    if mode != "shadow":
         info["self_check_last"] = ledger.get_state(f"last_consistency:{mode}")
         info["self_check_bad_streak"] = ledger.get_state(f"inconsistent_streak:{mode}") or 0
         try:
