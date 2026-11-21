@@ -88,3 +88,21 @@ def test_a_market_settled_before_its_listed_close_is_still_picked_up():
     assert catalog.sync_settlements(Settled([]), ledger, ["S-E1-B"]) == 1
     assert ledger.one("SELECT result FROM markets WHERE ticker='S-E1-B'")["result"] == "no"
     assert catalog.unsettled(ledger, {"S-E1-A", "S-E1-C"}, stamp) == []                    # and it is not asked for again
+
+
+def test_a_position_left_by_a_cancelled_order_is_still_priced():
+    """An order that filled in part and was then cancelled ends as 'cancelled'; what it bought must stay watched."""
+    ledger = Ledger(":memory:")
+    catalog.pull_open_quotes(Exchange(["S-E1-A", "S-E1-B", "S-E1-C"]), ledger, SERIES)
+    ledger.insert_many("orders", [
+        {"client_order_id": "o-a", "ticker": "S-E1-A", "side": "yes", "price": 0.12, "contracts": 41, "mode": "live", "status": "cancelled"},
+        {"client_order_id": "o-b", "ticker": "S-E1-B", "side": "yes", "price": 0.12, "contracts": 41, "mode": "live", "status": "cancelled"},
+        {"client_order_id": "o-c", "ticker": "S-E1-C", "side": "yes", "price": 0.12, "contracts": 41, "mode": "live", "status": "resting"},
+    ])
+    ledger.insert_many("fills", [{"id": "f-a", "client_order_id": "o-a", "ticker": "S-E1-A", "side": "yes", "price": 0.12,
+                                  "contracts": 18.16, "fee": 0.0, "ts": 1, "simulated": 0}])
+    assert sorted(catalog.watched(ledger, "live")) == ["S-E1-A", "S-E1-C"]      # A is held, C is resting, B is neither
+    assert catalog.watched(ledger, "shadow") == []                              # another mode's book is not ours
+
+    ledger.execute("UPDATE markets SET result='no' WHERE ticker='S-E1-A'")
+    assert catalog.watched(ledger, "live") == ["S-E1-C"]                        # settled: nothing left to price

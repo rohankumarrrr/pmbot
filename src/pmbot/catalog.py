@@ -212,6 +212,17 @@ def snapshot(ledger: Ledger, quotes: list[Quote], stamp: int | None = None) -> N
     ])
 
 
+def watched(ledger: Ledger, mode: str) -> list[str]:
+    """Markets to keep pricing every cycle: those with an order of ours, and those where we hold a
+    position that has not settled. The second half matters for an order that filled in part and was
+    then cancelled: its status is 'cancelled', but the contracts it bought still need a price."""
+    rows = ledger.query(
+        "SELECT ticker FROM orders WHERE mode=? AND status IN ('resting','partial','filled','partial_cancelled') "
+        "UNION SELECT f.ticker FROM fills f JOIN orders o ON o.client_order_id = f.client_order_id "
+        "LEFT JOIN markets m ON m.ticker = f.ticker WHERE o.mode=? AND m.result IS NULL", [mode, mode])
+    return [r["ticker"] for r in rows]
+
+
 def unsettled(ledger: Ledger, open_tickers: set[str], stamp: int | None = None) -> list[str]:
     """Markets we decided on whose result the ledger lacks and that may have stopped trading: within
     an hour of the listed close, or missing from the open catalogue just pulled. Kalshi settles a

@@ -116,7 +116,7 @@ class Runner:
         quotes = catalog.pull_open_quotes(self.data, self.ledger)
         by_ticker = {q.ticker: q for q in quotes}
         cands = candidates(quotes, self.cfg.universe)
-        watched = self.watched_tickers()
+        watched = catalog.watched(self.ledger, self.mode)
         catalog.snapshot(self.ledger, [q for c in cands for q in c.quotes] + [by_ticker[t] for t in watched if t in by_ticker])
         stats.update(open_markets=len(quotes), candidate_events=len(cands))
 
@@ -178,12 +178,6 @@ class Runner:
                 })
         self.ledger.insert_many("decisions", rows)
         return len(rows)
-
-    def watched_tickers(self) -> list[str]:
-        rows = self.ledger.query(
-            "SELECT DISTINCT ticker FROM orders WHERE mode=? AND status IN ('resting','partial','filled','partial_cancelled')",
-            [self.mode])
-        return [r["ticker"] for r in rows]
 
     # --- forecasting -------------------------------------------------------
 
