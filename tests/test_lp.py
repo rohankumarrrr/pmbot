@@ -155,3 +155,69 @@ def test_cancel_reasons_are_counted_for_the_cycle_log():
     moved = [(0.41, 300)] + YES
     assert provider.prune(provider.my_orders(), programs, quotes, {"T-1": (moved, no)}, 0.0) == 1
     assert dict(provider.cancel_reasons) == {"reference_moved": 1}
+
+
+# --- staying in a program until it pays ---------------------------------------
+
+def sticky_provider(**lp_over):
+    import copy
+
+    from pmbot.execution.brokers import ShadowBroker
+    from pmbot.ledger.db import Ledger
+    from pmbot.lp_runner import LiquidityProvider
+    from pmbot.risk import RiskManager
+    from test_core import Tape
+
+    raw = copy.deepcopy(dict(config.load("config/settings.yaml")))
+    raw["lp"].update(lp_over)
+    cfg, ledger = config.Config(raw), Ledger(":memory:")
+    return LiquidityProvider(cfg, ledger, object(), ShadowBroker(ledger, Tape([])), RiskManager(ledger, cfg, "shadow", 1000.0), "shadow"), ledger
+
+
+NO = [(0.55, 300), (0.54, 900)]
+
+
+def test_a_program_too_small_to_pay_is_quoted_only_if_earnings_there_already_close_the_gap():
+    cfg, now = config.load("config/settings.yaml"), 1_000_000
+    small = {"T-1": program(reward_day=10.0, end_ts=now + 86400)}      # a 50-contract quote earns about 36c in its last day
+    args = (small, {"T-1": quote()}, {"T-1": (YES, NO)}, cfg.lp, 1000.0, now)
+    assert lp.rank(*args) == []                                         # under the $1 floor: resting there earns nothing
+    assert [s.side for s in lp.rank(*args, accrued={"T-1": 1.30})] == ["no"]   # the cheap YES bid still fails on fill cost
+
+
+def test_new_quotes_go_first_to_programs_already_earning():
+    provider, ledger = sticky_provider(max_quotes=2)
+    programs = {"T-1": program(), "T-2": program(ticker="T-2", reward_day=50.0)}      # T-1 pays twice as much
+    quotes = {"T-1": quote(), "T-2": quote(ticker="T-2")}
+    books = {"T-1": (YES, NO), "T-2": (YES, NO)}
+    provider.earned = {"T-2": 0.40}                                     # but 40c is already earned in T-2 this period
+    assert provider.place(programs, quotes, books, 0.0) == 2
+    assert {r["ticker"] for r in ledger.query("SELECT ticker FROM orders")} == {"T-2"}
+
+
+def test_a_quote_that_can_no_longer_reach_the_payout_floor_is_pulled():
+    provider, ledger = sticky_provider()
+    programs, quotes = {"T-1": program()}, {"T-1": quote()}
+    assert provider.place(programs, quotes, {"T-1": (YES, NO)}, 0.0) == 2
+    fading = {"T-1": program(reward_day=10.0, end_ts=86400)}            # the pool shrank: about 36c a side by the end
+    assert provider.prune(provider.my_orders(), fading, quotes, {"T-1": (YES, NO)}, 0.0) == 2
+    # The NO bid would still cover its fill cost, but the program cannot pay; the YES bid fails on fill cost first.
+    assert dict(provider.cancel_reasons) == {"cannot_reach_payout": 1, "yield_below_fill_cost": 1}
+
+
+def test_estimated_rewards_are_split_by_whether_the_program_would_pay():
+    import time
+
+    from pmbot.ledger.db import Ledger
+    from pmbot.score import rewards_by_program
+
+    ledger, now = Ledger(":memory:"), int(time.time())
+    periods = {"PAID": (now - 3 * 86400, now - 86400), "SMALL": (now - 3 * 86400, now - 86400), "RUNNING": (now - 86400, now + 86400)}
+    for ticker, (start, end) in periods.items():
+        ledger.insert("lp_programs", {"mode": "shadow", "ticker": ticker, "start_ts": start, "end_ts": end, "reward_day": 5.0})
+    for ticker, usd, ts in (("PAID", 0.7, now - 2 * 86400), ("PAID", 0.6, now - 2 * 86400 + 60), ("SMALL", 0.4, now - 2 * 86400),
+                            ("RUNNING", 0.3, now - 3600), ("OLD", 0.2, now - 3600)):
+        ledger.insert("lp_accruals", {"ts": ts, "mode": "shadow", "ticker": ticker, "side": "yes", "seconds": 60, "share": 0.1, "usd": usd})
+    r = rewards_by_program(ledger, "shadow")
+    assert (r["payable_ended"], r["forfeited_ended"], r["running_below_floor"], r["untracked"]) == (1.3, 0.4, 0.3, 0.2)
+    assert (r["programs_ended"], r["programs_ended_paying"], r["programs_running"]) == (2, 1, 1)

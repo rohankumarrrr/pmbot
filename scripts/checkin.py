@@ -18,6 +18,7 @@ from pmbot.score import lp_report, report
 BOTS = {
     "paper": {"config": "config/settings.yaml", "log": "logs/bot.log", "process": "pmbot cycle --every 600", "interval_s": 600},
     "demo": {"config": "config/demo.yaml", "log": "logs/demo.log", "process": "pmbot cycle --every 300", "interval_s": 300},
+    "twin": {"config": "config/twin.yaml", "log": "logs/twin.log", "process": "pmbot cycle --every 240", "interval_s": 240},
     "live": {"config": "config/live.yaml", "log": "logs/live.log", "process": "pmbot cycle --every 300", "interval_s": 300},
 }
 WANTED = sys.argv[1:] or ["paper", "demo"]
@@ -68,6 +69,7 @@ for name in WANTED:
     }
     if mode == "shadow":
         info["reward_strategy"] = lp_report(ledger, mode)
+    if name == "paper":
         score = report(ledger, mode)
         info["forecasts"] = {k: score.get(k) for k in ("resolved_events", "target_events", "forecast_runs", "brier",
                                                         "confirmation_half", "simulated_pnl", "price_correction_baseline", "gate0")}

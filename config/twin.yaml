@@ -1,0 +1,9 @@
+# A paper copy of the live bot: same settings and $100, no orders sent. It shows at no cost how the
+# reward strategy behaves at live size, in particular how much of its estimated reward lands in
+# programs that reach Kalshi's $1 payout floor. Its simulated fills are far rarer than live fills were.
+#   ./scripts/run_bot.sh twin
+extends: live.yaml
+
+mode: shadow
+bankroll_usd: 100
+ledger_path: data/ledger_twin.sqlite

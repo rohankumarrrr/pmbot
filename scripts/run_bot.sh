@@ -3,6 +3,7 @@
 # order is keyed to its decision.
 #   ./scripts/run_bot.sh                 paper trading (config/settings.yaml)
 #   ./scripts/run_bot.sh demo            demo exchange, fake money, no forecasts (config/demo.yaml)
+#   ./scripts/run_bot.sh twin            paper copy of the live bot at live size (config/twin.yaml)
 # `caffeinate -i` keeps the Mac from idle-sleeping while a bot runs; nothing runs while it sleeps.
 # It does not stop sleep from closing a laptop lid. Stopping the bot releases it.
 cd "$(dirname "$0")/.."
@@ -11,5 +12,9 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"   # so the
 if [[ "$1" == "demo" ]]; then
   export PMBOT_CONFIG=config/demo.yaml
   exec caffeinate -i pmbot cycle --every "${PMBOT_INTERVAL:-300}" --no-forecast >> logs/demo.log 2>&1
+fi
+if [[ "$1" == "twin" ]]; then
+  export PMBOT_CONFIG=config/twin.yaml
+  exec caffeinate -i pmbot cycle --every "${PMBOT_INTERVAL:-240}" --no-forecast >> logs/twin.log 2>&1
 fi
 exec caffeinate -i pmbot cycle --every "${PMBOT_INTERVAL:-600}" >> logs/bot.log 2>&1

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import pandas as pd
 import yaml
@@ -148,6 +150,36 @@ def report(ledger: Ledger, mode: str, gates_path: str = "config/gates.yaml") -> 
     return out
 
 
+def rewards_by_program(ledger: Ledger, mode: str) -> dict:
+    """Estimated rewards split by whether Kalshi would pay them: a program pays only if the account's
+    share reaches $1 by the end of its period. Accruals from before programs were recorded are 'untracked'."""
+    from .lp import MIN_PAYOUT
+    periods: dict[str, list] = {}
+    for p in ledger.query("SELECT ticker, start_ts, end_ts FROM lp_programs WHERE mode=? ORDER BY start_ts", [mode]):
+        periods.setdefault(p["ticker"], []).append((p["start_ts"], p["end_ts"]))
+    totals: dict[tuple, float] = {}
+    untracked = 0.0
+    for a in ledger.query("SELECT ticker, ts, usd FROM lp_accruals WHERE mode=?", [mode]):
+        period = next((pp for pp in reversed(periods.get(a["ticker"], [])) if pp[0] <= a["ts"] <= pp[1] + 600), None)
+        if period is None:
+            untracked += a["usd"]
+        else:
+            totals[(a["ticker"], *period)] = totals.get((a["ticker"], *period), 0.0) + a["usd"]
+    stamp = time.time()
+    ended = {k: v for k, v in totals.items() if k[2] < stamp}
+    running = {k: v for k, v in totals.items() if k[2] >= stamp}
+    return {
+        "payable_ended": round(sum(v for v in ended.values() if v >= MIN_PAYOUT), 4),          # periods over, at or above $1
+        "forfeited_ended": round(sum(v for v in ended.values() if v < MIN_PAYOUT), 4),         # periods over, under $1: not paid
+        "running_at_or_above_floor": round(sum(v for v in running.values() if v >= MIN_PAYOUT), 4),
+        "running_below_floor": round(sum(v for v in running.values() if v < MIN_PAYOUT), 4),
+        "programs_ended": len(ended), "programs_ended_paying": sum(v >= MIN_PAYOUT for v in ended.values()),
+        "programs_running": len(running), "programs_running_at_or_above_floor": sum(v >= MIN_PAYOUT for v in running.values()),
+        "largest_running": round(max(running.values(), default=0.0), 4),
+        "untracked": round(untracked, 4),
+    }
+
+
 def lp_report(ledger: Ledger, mode: str) -> dict:
     """Liquidity-reward strategy so far: estimated rewards against what the fills cost."""
     acc = ledger.one("SELECT COUNT(*) AS n, COALESCE(SUM(usd),0) AS usd, MIN(ts) AS t0, MAX(ts) AS t1 "
@@ -171,10 +203,12 @@ def lp_report(ledger: Ledger, mode: str) -> dict:
     fills = ledger.one("SELECT COUNT(*) AS n, COALESCE(SUM(f.contracts),0) AS c FROM fills f JOIN orders o ON o.client_order_id=f.client_order_id "
                        "JOIN decisions d ON d.id=o.decision_id WHERE o.mode=? AND d.strategy='lp'", [mode])
     rewards = acc["usd"]
+    by_program = rewards_by_program(ledger, mode)
     return {
         "mode": mode, "hours_running": round(hours, 2),
         "resting_quotes": resting["n"], "dollars_at_risk_resting": round(resting["at_risk"], 2),
         "estimated_rewards": round(rewards, 4),
+        "rewards_by_program": by_program,
         "estimated_rewards_per_day": round(rewards / hours * 24, 2) if hours > 0 else None,
         "fills": fills["n"], "contracts_filled": fills["c"],
         "inventory_cost": round(open_cost, 2), "inventory_marked": round(open_value, 2),

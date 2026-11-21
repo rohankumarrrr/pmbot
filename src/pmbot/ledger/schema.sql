@@ -192,3 +192,15 @@ CREATE TABLE IF NOT EXISTS equity_history (
     credited          REAL,      -- cumulative cash the exchange credited that trading does not explain; NULL on paper
     PRIMARY KEY (mode, ts)
 ) WITHOUT ROWID;
+
+-- Reward programs the bot has quoted in. A program pays only if the account's share reaches $1 by the end
+-- of its period, so estimated rewards have to be added up per program, not in total.
+CREATE TABLE IF NOT EXISTS lp_programs (
+    mode        TEXT NOT NULL,
+    ticker      TEXT NOT NULL,
+    start_ts    INTEGER NOT NULL,
+    end_ts      INTEGER,
+    reward_day  REAL,
+    PRIMARY KEY (mode, ticker, start_ts)
+) WITHOUT ROWID;
+

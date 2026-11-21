@@ -25,6 +25,7 @@ class LiquidityProvider:
         self._programs: dict[str, lp.Program] = {}
         self._programs_ts = 0.0
         self.cancel_reasons: Counter = Counter()
+        self.earned: dict[str, float] = {}      # estimated dollars accrued per program this period; set each step
 
     def programs(self) -> dict[str, lp.Program]:
         if time.time() - self._programs_ts > self.c.refresh_programs_minutes * 60:
@@ -61,12 +62,25 @@ class LiquidityProvider:
         books = lp.fetch_books(self.data, sorted(set(eligible) | {o["ticker"] for o in orders}))
         stats = {"lp_programs": len(programs), "lp_eligible_markets": len(eligible)}
         stats["lp_accrued"] = round(self.accrue(orders, programs, by_ticker, books, stamp), 4)
+        self.ledger.insert_many("lp_programs", [
+            {"mode": self.mode, "ticker": t, "start_ts": int(programs[t].start_ts), "end_ts": int(programs[t].end_ts),
+             "reward_day": programs[t].reward_day} for t in {o["ticker"] for o in orders} if t in programs], replace=True)
+        self.earned = self.accrued(programs)
         stats["lp_cancelled"] = self.prune(orders, programs, by_ticker, books, stamp)
         if self.cancel_reasons:
             stats["lp_cancel_reasons"] = dict(self.cancel_reasons)   # logged so churn can be diagnosed
         stats["lp_placed"] = self.place(programs, by_ticker, books, stamp)
         self.ledger.set_state(f"lp_last_step:{self.mode}", stamp)
         return stats
+
+    def accrued(self, programs: dict[str, lp.Program]) -> dict[str, float]:
+        """Estimated dollars already earned in each program's current period, by ticker."""
+        out: dict[str, float] = {}
+        for r in self.ledger.query("SELECT ticker, ts, usd FROM lp_accruals WHERE mode=? AND ts>?", [self.mode, now() - 8 * DAY]):
+            prog = programs.get(r["ticker"])
+            if prog and r["ts"] >= prog.start_ts:
+                out[r["ticker"]] = out.get(r["ticker"], 0.0) + r["usd"]
+        return out
 
     # --- reward accounting -------------------------------------------------
 
@@ -107,6 +121,7 @@ class LiquidityProvider:
         """Cancel quotes that stopped earning or drifted away from the reference price."""
         n = 0
         self.cancel_reasons = Counter()
+        rate = self.reward_rates(orders, programs, by_ticker, books)
         for o in orders:
             prog, q, book = programs.get(o["ticker"]), by_ticker.get(o["ticker"]), books.get(o["ticker"])
             reason = None
@@ -129,13 +144,29 @@ class LiquidityProvider:
                 else:
                     share = lp.my_share(levels, prog.target, prog.discount, tick, o["price"], o["remaining"], self.mode != "shadow")
                     gross = prog.reward_day * share / 2 / (o["price"] * o["remaining"])
+                    days_left = max((prog.end_ts - stamp) / DAY, 0)
                     if gross + self.c.fill_prob_day * lp.fill_return(o["price"], self.c) < 0:
                         reason = "yield_below_fill_cost"     # the pool got crowded, or the ranking rules changed
+                    elif self.earned.get(o["ticker"], 0.0) + rate.get(o["ticker"], 0.0) * days_left < lp.MIN_PAYOUT:
+                        reason = "cannot_reach_payout"       # resting here takes fill risk for a reward that will not be paid
             if reason:
                 self.broker.cancel(o["client_order_id"], reason)
                 self.cancel_reasons[reason] += 1
                 n += 1
         return n
+
+    def reward_rates(self, orders, programs, by_ticker, books) -> dict[str, float]:
+        """Estimated dollars a day our resting orders are earning in each market, both sides together."""
+        out: dict[str, float] = {}
+        for o in orders:
+            prog, q, book = programs.get(o["ticker"]), by_ticker.get(o["ticker"]), books.get(o["ticker"])
+            if not prog or not q or not book or o["remaining"] <= 0:
+                continue
+            tick = q.tick(q.mid if q.two_sided else 0.5)
+            levels = book[0] if o["side"] == "yes" else book[1]
+            share = lp.my_share(levels, prog.target, prog.discount, tick, o["price"], o["remaining"], self.mode != "shadow")
+            out[o["ticker"]] = out.get(o["ticker"], 0.0) + prog.reward_day * share / 2
+        return out
 
     # --- placing -----------------------------------------------------------
 
@@ -161,7 +192,13 @@ class LiquidityProvider:
         cooling = {r["ticker"] for r in self.ledger.query(
             "SELECT DISTINCT ticker FROM orders WHERE mode=? AND status='rejected' AND created_ts>?",
             [self.mode, now() - self.c.get("reject_cooldown_hours", 6) * 3600])}
-        for sq in lp.rank(programs, by_ticker, books, self.c, self.risk.bankroll, stamp):
+        ranked = lp.rank(programs, by_ticker, books, self.c, self.risk.bankroll, stamp, self.earned)
+        # Stay where rewards are already building: a program pays only once the account's share reaches $1,
+        # so moving to whichever market ranks best this cycle throws away what was earned in the last one.
+        # (The sort is stable: programs with nothing earned yet keep their net-yield order.)
+        sticky = self.c.get("sticky_min_accrued", 0.05)
+        ranked.sort(key=lambda s: -(self.earned.get(s.ticker, 0.0) if self.earned.get(s.ticker, 0.0) >= sticky else 0.0))
+        for sq in ranked:
             if slots <= 0 or at_risk >= budget:
                 break
             if sq.ticker in cooling:

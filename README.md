@@ -30,7 +30,7 @@ Needs Python 3.12+ and, for forecasts, the [`claude` CLI](https://claude.com/cla
 ```sh
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-python -m pytest            # 73 tests, no network
+python -m pytest            # 79 tests, no network
 ```
 
 ## Running it
@@ -48,7 +48,7 @@ pmbot halt "reason"         # kill switch: cancel everything and stop
 pmbot resume
 ```
 
-- `scripts/run_bot.sh` runs the paper loop and `scripts/run_bot.sh demo` the demo loop. Both log to `logs/` and keep a Mac from idle-sleeping while they run.
+- `scripts/run_bot.sh` runs the paper loop, `scripts/run_bot.sh demo` the demo loop, and `scripts/run_bot.sh twin` a paper copy of the live bot at live size (`config/twin.yaml`). Both log to `logs/` and keep a Mac from idle-sleeping while they run.
 - `scripts/dashboard.sh [paper|demo|live]` builds the dashboard page and opens it. Kalshi's site does not show subaccounts, so this is the live account's portfolio screen.
 - `scripts/check_consistency.py` compares the ledger with the exchange.
 - `scripts/checkin.py` prints a JSON health summary of both loops.
