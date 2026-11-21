@@ -68,3 +68,23 @@ def test_a_market_that_fell_from_its_day_ago_book_counts_as_moving():
     (q,) = catalog.pull_open_quotes(One([]), Ledger(":memory:"), SERIES)
     prog = lp.Program("S-E1-A", "S", 10.0, 1000, 0.5, 0, now + 30 * 86400)
     assert "price_moving" in lp.market_reasons(prog, q, cfg.lp, now)
+
+
+def test_a_market_settled_before_its_listed_close_is_still_picked_up():
+    """Kalshi settles a market once its outcome is known, which can be a week before the listed close."""
+    class Settled(Exchange):
+        def get(self, path, **params):
+            return {"markets": [{**market(t), "status": "finalized", "result": "no"} for t in params["tickers"].split(",")]}
+
+    ledger = Ledger(":memory:")
+    catalog.pull_open_quotes(Exchange(["S-E1-A", "S-E1-B", "S-E1-C"]), ledger, SERIES)     # all close in 2027
+    ledger.insert_many("decisions", [{"id": f"d-{t}", "kind": "lp", "ticker": t, "event_ticker": "S-E1", "created_ts": 1,
+                                      "mode": "live", "action": "quote"} for t in ("S-E1-A", "S-E1-B")])
+    stamp = 1_790_000_000                                                                  # long before that close
+    assert catalog.unsettled(ledger, {"S-E1-A", "S-E1-B", "S-E1-C"}, stamp) == []          # both still trading
+    assert catalog.unsettled(ledger, {"S-E1-A", "S-E1-C"}, stamp) == ["S-E1-B"]            # B has left the open catalogue
+    assert catalog.unsettled(ledger, set(), stamp) == []                                   # no catalogue: close date only
+
+    assert catalog.sync_settlements(Settled([]), ledger, ["S-E1-B"]) == 1
+    assert ledger.one("SELECT result FROM markets WHERE ticker='S-E1-B'")["result"] == "no"
+    assert catalog.unsettled(ledger, {"S-E1-A", "S-E1-C"}, stamp) == []                    # and it is not asked for again

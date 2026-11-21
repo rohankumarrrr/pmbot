@@ -212,6 +212,21 @@ def snapshot(ledger: Ledger, quotes: list[Quote], stamp: int | None = None) -> N
     ])
 
 
+def unsettled(ledger: Ledger, open_tickers: set[str], stamp: int | None = None) -> list[str]:
+    """Markets we decided on whose result the ledger lacks and that may have stopped trading: within
+    an hour of the listed close, or missing from the open catalogue just pulled. Kalshi settles a
+    market as soon as its outcome is known, which can be days before the listed close, so the close
+    date alone would leave such positions on the books as open.
+
+    An empty `open_tickers` means no catalogue to compare with, and only the close date is used."""
+    cutoff = (stamp or now()) + 3600
+    rows = ledger.query(
+        "SELECT DISTINCT d.ticker, m.close_ts FROM decisions d JOIN markets m ON m.ticker = d.ticker "
+        "WHERE m.result IS NULL")
+    return [r["ticker"] for r in rows
+            if (r["close_ts"] is not None and r["close_ts"] < cutoff) or (open_tickers and r["ticker"] not in open_tickers)]
+
+
 def sync_settlements(client: KalshiClient, ledger: Ledger, tickers: list[str]) -> int:
     """Refresh status and result for markets we hold an interest in. Returns how many settled."""
     settled = 0

@@ -121,7 +121,7 @@ class Runner:
         stats.update(open_markets=len(quotes), candidate_events=len(cands))
 
         stats["fills"] = self.broker.sync()
-        stats["settled"] = catalog.sync_settlements(self.data, self.ledger, self.unsettled_tickers())
+        stats["settled"] = catalog.sync_settlements(self.data, self.ledger, catalog.unsettled(self.ledger, set(by_ticker)))
 
         if self.mode != "shadow":
             from .consistency import check_and_react
@@ -183,12 +183,6 @@ class Runner:
         rows = self.ledger.query(
             "SELECT DISTINCT ticker FROM orders WHERE mode=? AND status IN ('resting','partial','filled','partial_cancelled')",
             [self.mode])
-        return [r["ticker"] for r in rows]
-
-    def unsettled_tickers(self) -> list[str]:
-        rows = self.ledger.query(
-            "SELECT DISTINCT d.ticker FROM decisions d JOIN markets m ON m.ticker = d.ticker "
-            "WHERE m.result IS NULL AND m.close_ts < ?", [now() + HOUR])
         return [r["ticker"] for r in rows]
 
     # --- forecasting -------------------------------------------------------
