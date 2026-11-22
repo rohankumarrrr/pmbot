@@ -15,6 +15,8 @@ trading:
 
 lp:
   max_at_risk_per_quote: 5.0      # dollars; about 19 quotes at $100
+  contracts_per_side: 250         # so a cheap quote uses the whole $5 (250 x 2c); the default 50 left 1c-5c quotes at $0.50-$2.50,
+                                  # too small to reach the $1 a program must earn before it pays. Dearer quotes are still cut to $5.
   min_contracts: 10
   max_quotes: 30
 

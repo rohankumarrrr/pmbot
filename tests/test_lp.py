@@ -234,3 +234,22 @@ def test_estimated_rewards_are_split_by_whether_the_program_would_pay():
     r = rewards_by_program(ledger, "shadow")
     assert (r["payable_ended"], r["forfeited_ended"], r["running_below_floor"], r["untracked"]) == (1.3, 0.4, 0.3, 0.2)
     assert (r["programs_ended"], r["programs_ended_paying"], r["programs_running"]) == (2, 1, 1)
+
+
+def test_live_quotes_use_the_whole_per_quote_cap_on_cheap_contracts():
+    """A program pays nothing under $1, so at live size a quote should put its full $5 to work."""
+    now = 1_000_000
+    cheap = quote(yes_bid=0.02, yes_ask=0.05, last_price=0.03, previous_price=0.03)
+    books = {"T-1": ([(0.02, 600), (0.01, 900)], [(0.95, 400), (0.94, 900)])}
+    live, paper = config.load("config/live.yaml").lp, config.load("config/settings.yaml").lp
+
+    [yes] = [s for s in lp.rank({"T-1": program()}, {"T-1": cheap}, books, live, 100.0, now) if s.side == "yes"]
+    assert (yes.contracts, yes.at_risk) == (250, pytest.approx(5.0))          # was 50 contracts, $1 at risk
+    [small] = [s for s in lp.rank({"T-1": program()}, {"T-1": cheap}, books, paper, 100.0, now) if s.side == "yes"]
+    assert small.contracts == 50 and yes.reward_day > 3 * small.reward_day    # the larger quote earns its program's dollar sooner
+    assert not [s for s in lp.rank({"T-1": program()}, {"T-1": cheap}, books, live, 100.0, now) if s.side == "no"]   # 95c side: 5 contracts, under the minimum
+
+    dearer = quote(yes_bid=0.18, yes_ask=0.22, last_price=0.20, previous_price=0.20)
+    books = {"T-1": ([(0.18, 600), (0.17, 900)], [(0.78, 400), (0.77, 900)])}
+    [yes] = [s for s in lp.rank({"T-1": program()}, {"T-1": dearer}, books, live, 100.0, now) if s.side == "yes"]
+    assert (yes.contracts, yes.at_risk) == (27, pytest.approx(4.86))          # still cut down to the $5 cap
