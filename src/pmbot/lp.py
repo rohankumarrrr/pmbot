@@ -256,6 +256,30 @@ def worth_staying(accrued: float, net_yield_day: float, at_risk: float, days_lef
     return net_yield_day * at_risk * days_left + accrued >= 0
 
 
+def resized(sq: SideQuote, contracts: int, prog: Program, q: Quote, book: tuple[Levels, Levels]) -> SideQuote:
+    """The same quote at another size, with the share of the reward that size would earn."""
+    tick = q.tick(q.mid if q.two_sided else 0.5)
+    levels = book[0] if sq.side == "yes" else book[1]
+    share = my_share(levels, prog.target, prog.discount, tick, sq.price, contracts, False)
+    return SideQuote(sq.ticker, sq.side, sq.price, contracts, share, prog.reward_day * share / 2,
+                     sq.price * contracts, sq.queue_ahead)
+
+
+def worth_quoting(sq: SideQuote, prog: Program, lp, now: float, accrued: float, committed: bool) -> bool:
+    """Whether a quote of this size earns its place: the program can reach its payout, and the reward covers the fills.
+
+    A program pays nothing below $1 for the period, so what is already earned there (`accrued`) plus what
+    this quote would add by the end has to clear it: with a margin for a new market, exactly for a
+    `committed` one (already quoted this period).
+    """
+    days_left = max((prog.end_ts - now) / DAY, 0)
+    floor = MIN_PAYOUT if committed else lp.min_expected_payout
+    if accrued + sq.reward_day * days_left < floor:
+        return False
+    net = sq.net_yield_day(lp)
+    return net >= lp.min_yield_day or (committed and worth_staying(accrued, net, sq.at_risk, days_left, lp))
+
+
 def family(ticker: str, lp) -> str:
     """Markets that tend to move on the same news: the first letters of the series name.
 
@@ -289,18 +313,8 @@ def rank(programs: dict[str, Program], quotes: dict[str, Quote], books: dict[str
                 n = int(cap // sq.price)
                 if n < lp.min_contracts:
                     continue
-                tick = q.tick(q.mid if q.two_sided else 0.5)
-                levels = book[0] if sq.side == "yes" else book[1]
-                share = my_share(levels, prog.target, prog.discount, tick, sq.price, n, False)
-                sq = SideQuote(ticker, sq.side, sq.price, n, share, prog.reward_day * share / 2, sq.price * n, sq.queue_ahead)
-            # A program pays nothing below $1 for the period: what is already earned there plus what this
-            # quote would add by the end has to clear it, with a margin.
-            days_left = max((prog.end_ts - now) / DAY, 0)
-            floor = MIN_PAYOUT if ticker in committed else lp.min_expected_payout
-            if accrued.get(ticker, 0.0) + sq.reward_day * days_left < floor:
-                continue
-            if sq.net_yield_day(lp) >= lp.min_yield_day or (
-                    ticker in committed and worth_staying(accrued.get(ticker, 0.0), sq.net_yield_day(lp), sq.at_risk, days_left, lp)):
+                sq = resized(sq, n, prog, q, book)
+            if worth_quoting(sq, prog, lp, now, accrued.get(ticker, 0.0), ticker in committed):
                 out.append(sq)
     out.sort(key=lambda s: -s.net_yield_day(lp))
     return out

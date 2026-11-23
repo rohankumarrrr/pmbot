@@ -188,6 +188,7 @@ def test_a_program_too_small_to_pay_is_quoted_only_if_earnings_there_already_clo
 
 def test_a_market_quoted_this_period_keeps_its_slot_when_its_quotes_are_pulled():
     provider, ledger = sticky_provider(max_quotes=2)
+    provider.risk.bankroll = 2000.0                                     # room in one market for both sides at full size
     only_t2 = {"T-2": program(ticker="T-2", reward_day=50.0)}
     quotes = {"T-1": quote(), "T-2": quote(ticker="T-2")}
     books = {"T-1": (YES, NO), "T-2": (YES, NO)}
@@ -367,6 +368,29 @@ def test_a_program_with_rewards_banked_is_not_left_just_because_yield_dipped():
     off.earned = {"T-1": 0.90}
     off.prune(off.my_orders(), thin, quotes, books, 0.0)
     assert off.cancel_reasons["yield_below_fill_cost"] >= 1
+
+
+def test_a_quote_the_risk_limits_cut_down_is_placed_only_if_the_part_still_earns_its_payout():
+    """The twin placed 1-contract orders beside a full position, pulled them minutes later and placed them again."""
+    quotes, books, now = {"T-1": quote()}, {"T-1": (YES, NO)}, 1_000_000.0
+    [full] = [s for s in lp.rank({"T-1": program()}, quotes, books, config.load("config/settings.yaml").lp, 1000.0, now)
+              if s.side == "yes"]
+    assert full.contracts == 50
+
+    provider, _ = sticky_provider()
+    provider.risk.bankroll = 70.0                 # the per-market cap (3%) leaves room for 5 contracts, under the minimum of 10
+    assert provider.place({"T-1": program()}, quotes, books, now) == 0 and provider.my_orders() == []
+    assert provider.trimmed_away >= 1
+
+    # Room for 30 of the 50 contracts. With one day left, the program pays $1.50 to the whole quote but not to the part.
+    part = lp.resized(full, 30, program(), quotes["T-1"], books["T-1"])
+    assert part.reward_day < full.reward_day
+    pays_whole_only = 100.0 * 1.5 / full.reward_day * 1.02
+    for reward_day, placed in ((pays_whole_only, []), (3 * pays_whole_only, [30])):
+        provider, _ = sticky_provider()
+        provider.risk.bankroll = 400.0
+        provider.place({"T-1": program(reward_day=reward_day, end_ts=now + 86400)}, quotes, books, now)
+        assert [o["remaining"] for o in provider.my_orders() if o["side"] == "yes"] == placed
 
 
 def test_bids_below_the_minimum_price_are_neither_placed_nor_kept():

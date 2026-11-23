@@ -26,6 +26,7 @@ class LiquidityProvider:
         self._programs: dict[str, lp.Program] = {}
         self._programs_ts = 0.0
         self.cancel_reasons: Counter = Counter()
+        self.trimmed_away = 0                   # quotes skipped this step because the risk limits left too small a part
         self.earned: dict[str, float] = {}      # estimated dollars accrued per program this period; set each step
 
     def programs(self) -> dict[str, lp.Program]:
@@ -77,6 +78,8 @@ class LiquidityProvider:
         if self.cancel_reasons:
             stats["lp_cancel_reasons"] = dict(self.cancel_reasons)   # logged so churn can be diagnosed
         stats["lp_placed"] = self.place(programs, by_ticker, books, stamp)
+        if self.trimmed_away:
+            stats["lp_too_small_after_risk_trim"] = self.trimmed_away
         self.ledger.set_state(f"lp_last_step:{self.mode}", stamp)
         return stats
 
@@ -208,6 +211,7 @@ class LiquidityProvider:
         budget = self.c.capital_fraction * self.risk.bankroll
         slots = self.c.max_quotes - len(quoted)
         placed = 0
+        self.trimmed_away = 0
         # A post-only order is refused when the book moved between reading it and placing the order.
         # That market is repricing; leave it alone for a while instead of trying again every cycle.
         cooling = {r["ticker"] for r in self.ledger.query(
@@ -243,6 +247,17 @@ class LiquidityProvider:
             verdict = self.risk.review(Sizing(sq.side, sq.price, 0.0, 0.0, 0.0, sq.contracts), sq.ticker, q.event_ticker)
             if set(verdict.reasons) & {"halted", "max_open_orders", "max_orders_per_hour"}:
                 break           # an account-wide limit: nothing further can be placed this cycle
+            if verdict.ok and verdict.contracts < sq.contracts:
+                # The risk limits left room for part of this quote only (a position already held in the market,
+                # or its event near its cap). Its reward was worked out for the whole quote, so work it out
+                # again for the part. A few contracts cannot earn a program's $1: placed anyway, they were
+                # pulled within minutes as `cannot_reach_payout` and placed again, cycle after cycle.
+                part = lp.resized(sq, verdict.contracts, programs[sq.ticker], q, books[sq.ticker])
+                if verdict.contracts < self.c.min_contracts or not lp.worth_quoting(
+                        part, programs[sq.ticker], self.c, stamp, self.earned.get(sq.ticker, 0.0), sq.ticker in committed):
+                    self.trimmed_away += 1
+                    continue
+                sq = part
             decision = {
                 "id": new_id(), "kind": "lp_quote", "ticker": sq.ticker, "event_ticker": q.event_ticker,
                 "cluster": q.event_ticker, "created_ts": now(), "mode": self.mode, "strategy": "lp",
