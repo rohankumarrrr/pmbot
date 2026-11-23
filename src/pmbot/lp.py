@@ -242,6 +242,20 @@ def market_reasons(prog: Program, q: Quote, lp, now: float, committed: bool = Fa
 MIN_PAYOUT = 1.0     # Kalshi issues no payout under $1 for a program's period
 
 
+def worth_staying(accrued: float, net_yield_day: float, at_risk: float, days_left: float, lp) -> bool:
+    """Whether to keep quoting a program where the reward no longer covers the expected fill cost.
+
+    What is already earned there is lost if the bot leaves before the program reaches $1. So with
+    `lp.keep_committed_while_accrued` on, a quote stays while the expected loss from resting to the end
+    of the period (a negative net yield, on the dollars at risk, for the days left) is smaller than what
+    leaving would forfeit. Once the program is past $1 nothing is forfeited, and the plain rule applies.
+    The caller checks separately that the program can still reach $1.
+    """
+    if not lp.get("keep_committed_while_accrued") or not 0 < accrued < MIN_PAYOUT:
+        return False
+    return net_yield_day * at_risk * days_left + accrued >= 0
+
+
 def family(ticker: str, lp) -> str:
     """Markets that tend to move on the same news: the first letters of the series name.
 
@@ -283,7 +297,8 @@ def rank(programs: dict[str, Program], quotes: dict[str, Quote], books: dict[str
             floor = MIN_PAYOUT if ticker in committed else lp.min_expected_payout
             if accrued.get(ticker, 0.0) + sq.reward_day * days_left < floor:
                 continue
-            if sq.net_yield_day(lp) >= lp.min_yield_day:
+            if sq.net_yield_day(lp) >= lp.min_yield_day or (
+                    ticker in committed and worth_staying(accrued.get(ticker, 0.0), sq.net_yield_day(lp), sq.at_risk, days_left, lp)):
                 out.append(sq)
     out.sort(key=lambda s: -s.net_yield_day(lp))
     return out

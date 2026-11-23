@@ -341,3 +341,29 @@ def test_a_family_gets_only_a_few_markets():
     quoted = {o["ticker"] for o in provider.my_orders()}
     assert len({t for t in quoted if t.startswith("KXGAS")}) == 2 and "KXRAINNY-1" in quoted   # two gas markets, both sides each
     assert len(provider.my_orders()) == 6
+
+
+def test_a_program_with_rewards_banked_is_not_left_just_because_yield_dipped():
+    """Leaving at $0.90 forfeits the $0.90. Staying is worth it while the expected fill cost to the end is smaller."""
+    provider, ledger = sticky_provider(keep_committed_while_accrued=True)
+    quotes, books = {"T-1": quote()}, {"T-1": (YES, NO)}
+    assert provider.place({"T-1": program()}, quotes, books, 0.0) == 2
+    # The pool shrinks: the YES bid now earns less than its expected fill cost, with two days of the period left.
+    thin = {"T-1": program(reward_day=15.0, end_ts=2 * 86400)}
+    yes = next(o for o in provider.my_orders() if o["side"] == "yes")
+    at_risk = yes["price"] * yes["remaining"]
+    share = lp.my_share(YES, TARGET, DISCOUNT, TICK, yes["price"], yes["remaining"], False)
+    net = 15.0 * share / 2 / at_risk + provider.c.fill_prob_day * lp.fill_return(yes["price"], provider.c)
+    assert net < 0                                                       # so the plain rule would pull it
+    assert -net * at_risk * 2.0 < 0.45                                   # staying two days is expected to cost under 45c
+
+    assert lp.worth_staying(1.60, net, at_risk, 2.0, provider.c) is False   # past $1 nothing is forfeited: plain rule
+    provider.earned = {"T-1": 0.90}                                      # 45c a side at stake, and on course for $1
+    provider.prune(provider.my_orders(), thin, quotes, books, 0.0)
+    assert "yield_below_fill_cost" not in provider.cancel_reasons        # kept: leaving would forfeit more than staying costs
+
+    off, _ = sticky_provider()                                           # the setting is off by default
+    assert off.place({"T-1": program()}, quotes, books, 0.0) == 2
+    off.earned = {"T-1": 0.90}
+    off.prune(off.my_orders(), thin, quotes, books, 0.0)
+    assert off.cancel_reasons["yield_below_fill_cost"] >= 1

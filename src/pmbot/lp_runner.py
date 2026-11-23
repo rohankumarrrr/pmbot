@@ -137,6 +137,7 @@ class LiquidityProvider:
         n = 0
         self.cancel_reasons = Counter()
         rate = self.reward_rates(orders, programs, by_ticker, books)
+        sides = Counter(o["ticker"] for o in orders)
         for o in orders:
             prog, q, book = programs.get(o["ticker"]), by_ticker.get(o["ticker"]), books.get(o["ticker"])
             reason = None
@@ -160,7 +161,10 @@ class LiquidityProvider:
                     share = lp.my_share(levels, prog.target, prog.discount, tick, o["price"], o["remaining"], self.mode != "shadow")
                     gross = prog.reward_day * share / 2 / (o["price"] * o["remaining"])
                     days_left = max((prog.end_ts - stamp) / DAY, 0)
-                    if gross + self.c.fill_prob_day * lp.fill_return(o["price"], self.c) < 0:
+                    net = gross + self.c.fill_prob_day * lp.fill_return(o["price"], self.c)
+                    # The program's accrual is shared between our quotes there, so each side protects its part.
+                    banked = self.earned.get(o["ticker"], 0.0) / max(sides.get(o["ticker"], 1), 1)
+                    if net < 0 and not lp.worth_staying(banked, net, o["price"] * o["remaining"], days_left, self.c):
                         reason = "yield_below_fill_cost"     # the pool got crowded, or the ranking rules changed
                     elif self.earned.get(o["ticker"], 0.0) + rate.get(o["ticker"], 0.0) * days_left < lp.MIN_PAYOUT:
                         reason = "cannot_reach_payout"       # resting here takes fill risk for a reward that will not be paid

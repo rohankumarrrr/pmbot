@@ -65,6 +65,7 @@ lp:   # liquidity provision in markets that pay Kalshi liquidity rewards
   fill_prob_day: 0.25           # chance per day that a quote fills. Measured 2026-11-17 on paper: 0.22 under 15c, 0.42 at 15-50c (20 fills); was assumed 0.10
   fill_return: [[0.15, -0.45], [0.50, -0.15], [0.85, 0.05], [1.01, 0.02]]   # [price below, return]
   min_expected_payout: 1.5      # a program pays nothing under $1 for its period
+  keep_committed_while_accrued: false   # true: do not leave a program on yield while that would forfeit more than staying is expected to cost
   exclude_categories: [Sports, Crypto, Mentions]
   exclude_families: []          # ticker prefixes switched off by hand, e.g. [KXAAAGAS]; `pmbot pause KXAAAGAS` adds one while the bot runs
   max_markets_per_family: 3     # markets quoted or held per family (first family_prefix_len letters of the series); 0 = no cap
