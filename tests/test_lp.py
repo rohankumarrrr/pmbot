@@ -100,6 +100,7 @@ def test_eligibility_filters():
     assert "price_moving" in lp.market_reasons(program(end_ts=far), quote(close_ts=far, previous_price=0.60), cfg.lp, now)
     assert "category_excluded" in lp.market_reasons(program(end_ts=far), quote(close_ts=far, category="Sports"), cfg.lp, now)
     assert "program_ending" in lp.market_reasons(program(end_ts=now + 3600), ok, cfg.lp, now)
+    assert lp.market_reasons(program(end_ts=now + 3600), ok, cfg.lp, now, committed=True) == []   # already there: see it out
     assert "maker_fee_series" in lp.market_reasons(program(end_ts=far), quote(close_ts=far, fee_type="quadratic_with_maker_fees"), cfg.lp, now)
 
 
@@ -253,3 +254,20 @@ def test_live_quotes_use_the_whole_per_quote_cap_on_cheap_contracts():
     books = {"T-1": ([(0.18, 600), (0.17, 900)], [(0.78, 400), (0.77, 900)])}
     [yes] = [s for s in lp.rank({"T-1": program()}, {"T-1": dearer}, books, live, 100.0, now) if s.side == "yes"]
     assert (yes.contracts, yes.at_risk) == (27, pytest.approx(4.86))          # still cut down to the $5 cap
+
+
+def test_a_committed_quote_stays_through_the_programs_last_hours():
+    """Pulled 6 hours early at $0.86, a program forfeits what it earned; held, it pays."""
+    provider, ledger = sticky_provider()
+    quotes, books = {"T-1": quote(), "T-2": quote(ticker="T-2")}, {"T-1": (YES, NO), "T-2": (YES, NO)}
+    assert provider.place({"T-1": program(end_ts=5 * 86400)}, quotes, books, 0.0) == 2
+    ending = {"T-1": program(end_ts=3 * 3600), "T-2": program(ticker="T-2", end_ts=3 * 3600)}   # three hours left in both
+    import time
+    ledger.insert_many("lp_accruals", [{"ts": int(time.time()), "mode": "shadow", "ticker": "T-1", "side": "yes", "client_order_id": "x",
+                                        "seconds": 1.0, "share": 0.1, "usd": 0.90}])
+    provider.earned = provider.accrued(ending)
+    assert provider.prune(provider.my_orders(), ending, quotes, books, 0.0) == 0          # not pulled as `program_ending`
+    for o in provider.my_orders():
+        provider.broker.cancel(o["client_order_id"], "reference_moved")                    # a requote in the last hours
+    assert provider.place(ending, quotes, books, 0.0) == 2                                # comes back to T-1
+    assert {r["ticker"] for r in ledger.query("SELECT ticker FROM orders WHERE status='resting'")} == {"T-1"}   # T-2 is new: kept out

@@ -57,8 +57,9 @@ class LiquidityProvider:
         stamp = time.time()
         programs = self.programs() or self.synthetic_programs(by_ticker, stamp)
         orders = self.my_orders()
+        committed = self.committed(programs)
         eligible = [t for t, p in programs.items()
-                    if t in by_ticker and not lp.market_reasons(p, by_ticker[t], self.c, stamp)]
+                    if t in by_ticker and not lp.market_reasons(p, by_ticker[t], self.c, stamp, t in committed)]
         books = lp.fetch_books(self.data, sorted(set(eligible) | {o["ticker"] for o in orders}))
         stats = {"lp_programs": len(programs), "lp_eligible_markets": len(eligible)}
         stats["lp_accrued"] = round(self.accrue(orders, programs, by_ticker, books, stamp), 4)
@@ -135,8 +136,8 @@ class LiquidityProvider:
             reason = None
             if not prog or not q or not book:
                 reason = "program_or_market_gone"
-            elif lp.market_reasons(prog, q, self.c, stamp):
-                reason = ",".join(lp.market_reasons(prog, q, self.c, stamp))
+            elif lp.market_reasons(prog, q, self.c, stamp, committed=True):      # an order here means we are committed
+                reason = ",".join(lp.market_reasons(prog, q, self.c, stamp, committed=True))
             else:
                 tick = q.tick(q.mid if q.two_sided else 0.5)
                 levels = book[0] if o["side"] == "yes" else book[1]

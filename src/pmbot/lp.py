@@ -212,8 +212,13 @@ def plan_market(prog: Program, q: Quote, book: tuple[Levels, Levels], contracts:
     return out
 
 
-def market_reasons(prog: Program, q: Quote, lp, now: float) -> list[str]:
-    """Why a program market is not quoted; empty means it is eligible."""
+def market_reasons(prog: Program, q: Quote, lp, now: float, committed: bool = False) -> list[str]:
+    """Why a program market is not quoted; empty means it is eligible.
+
+    `committed` is a market already quoted in the program's current period. It is not dropped for
+    the program nearing its end: the share earned there pays only if it reaches $1 by the end, so
+    leaving in the last hours forfeits it. Only a new market is kept out of a program about to end.
+    """
     out = []
     if q.category in lp.exclude_categories:
         out.append("category_excluded")
@@ -223,7 +228,7 @@ def market_reasons(prog: Program, q: Quote, lp, now: float) -> list[str]:
         out.append("maker_fee_series")          # a maker fee would come out of every fill
     if not q.decides_ts or (q.decides_ts - now) / 3600 < lp.min_hours_to_close:
         out.append("closes_too_soon")           # the final stretch is when informed flow arrives
-    if (prog.end_ts - now) / 3600 < lp.min_hours_left_in_program:
+    if not committed and (prog.end_ts - now) / 3600 < lp.min_hours_left_in_program:
         out.append("program_ending")
     if q.two_sided and q.previous_price and abs(q.mid - q.previous_price) > lp.max_day_move:
         out.append("price_moving")              # repricing in progress: stale quotes get picked off
@@ -248,7 +253,7 @@ def rank(programs: dict[str, Program], quotes: dict[str, Quote], books: dict[str
     out: list[SideQuote] = []
     for ticker, prog in programs.items():
         q, book = quotes.get(ticker), books.get(ticker)
-        if q is None or book is None or market_reasons(prog, q, lp, now):
+        if q is None or book is None or market_reasons(prog, q, lp, now, ticker in committed):
             continue
         for sq in plan_market(prog, q, book, lp.contracts_per_side, lp, now):
             # Size down expensive sides so no single quote risks more than the per-quote cap.
