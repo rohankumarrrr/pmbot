@@ -28,6 +28,7 @@ class LiquidityProvider:
         self._programs_ts = 0.0
         self.cancel_reasons: Counter = Counter()
         self.trimmed_away = 0                   # quotes skipped this step because the risk limits left too small a part
+        self.offered_out = 0                    # offers placed this step on positions already held
         self.earned: dict[str, float] = {}      # estimated dollars accrued per program this period; set each step
 
     def programs(self) -> dict[str, lp.Program]:
@@ -51,7 +52,7 @@ class LiquidityProvider:
 
     def my_orders(self) -> list:
         return self.ledger.query(
-            f"""SELECT o.client_order_id, o.ticker, o.side, o.price, o.contracts, o.created_ts,
+            f"""SELECT o.client_order_id, o.ticker, o.side, o.price, o.contracts, o.created_ts, d.kind,
                        o.contracts - COALESCE((SELECT SUM(f.contracts) FROM fills f WHERE f.client_order_id = o.client_order_id), 0) AS remaining
                 FROM orders o JOIN decisions d ON d.id = o.decision_id
                 WHERE o.mode=? AND d.strategy='lp' AND o.status IN {LIVE_STATUSES}""", [self.mode])
@@ -81,6 +82,8 @@ class LiquidityProvider:
         stats["lp_placed"] = self.place(programs, by_ticker, books, stamp)
         if self.trimmed_away:
             stats["lp_too_small_after_risk_trim"] = self.trimmed_away
+        if self.offered_out:
+            stats["lp_offers_on_held_positions"] = self.offered_out
         self.ledger.set_state(f"lp_last_step:{self.mode}", stamp)
         return stats
 
@@ -142,10 +145,18 @@ class LiquidityProvider:
         self.cancel_reasons = Counter()
         rate = self.reward_rates(orders, programs, by_ticker, books)
         sides = Counter(o["ticker"] for o in orders)
+        held = self.exposure()[1]
         for o in orders:
             prog, q, book = programs.get(o["ticker"]), by_ticker.get(o["ticker"]), books.get(o["ticker"])
             reason, why = None, {}
-            if not prog or not q or not book:
+            closing = o["kind"] == "lp_close"
+            if closing and not self.c.get("offer_out_positions"):
+                reason = "offers_switched_off"
+            elif closing and o["remaining"] > held.get((o["ticker"], "no" if o["side"] == "yes" else "yes"), 0) + 1e-9:
+                # The position it was closing is gone or smaller (settled, or closed another way). Left resting,
+                # the rest of this order would open a position on the other side, at a size no cap ever checked.
+                reason = "position_gone"
+            elif not prog or not q or not book:
                 reason = "program_or_market_gone"
             elif lp.market_reasons(prog, q, self.c, stamp, committed=True):      # an order here means we are committed
                 reason = ",".join(lp.market_reasons(prog, q, self.c, stamp, committed=True))
@@ -156,7 +167,7 @@ class LiquidityProvider:
                 side = lp.score_side(levels if self.mode != "shadow" else lp.with_order(levels, o["price"], o["remaining"]),
                                      prog.target, prog.discount, tick)
                 why = {"ref": side.ref, "best": levels[0][0] if levels else None}
-                if o["price"] < self.c.get("min_bid_price", 0) - 1e-9:
+                if o["price"] < self.c.get("min_bid_price", 0) - 1e-9 and not closing:
                     reason = "bid_too_cheap"
                 elif not side.qualifies:
                     reason = "side_below_target"
@@ -164,6 +175,8 @@ class LiquidityProvider:
                     reason = "would_cross"          # the other side came to us: this is now the touch
                 elif abs(side.ref - o["price"]) >= self.c.requote_ticks * tick - 1e-9:
                     reason = "reference_moved"
+                elif closing:
+                    pass        # nothing at risk and no payout floor to reach: it rests until it fills or the price moves
                 else:
                     share = lp.my_share(levels, prog.target, prog.discount, tick, o["price"], o["remaining"], self.mode != "shadow")
                     gross = prog.reward_day * share / 2 / (o["price"] * o["remaining"])
@@ -207,21 +220,23 @@ class LiquidityProvider:
     def exposure(self) -> tuple[float, dict[tuple[str, str], float], set[tuple[str, str]]]:
         """(dollars at risk in LP orders and inventory, contracts held by (ticker, side), sides with a live order)."""
         orders = self.my_orders()
-        resting = sum(o["price"] * o["remaining"] for o in orders)
+        resting = sum(o["price"] * o["remaining"] for o in orders if o["kind"] != "lp_close")
         lp_tickers = {r["ticker"] for r in self.ledger.query(
             "SELECT DISTINCT ticker FROM decisions WHERE mode=? AND strategy='lp'", [self.mode])}
         held = {(p.ticker, p.side): p.contracts for p in positions(self.ledger, self.mode)
                 if p.ticker in lp_tickers and not p.decided and p.contracts > 0}
-        inventory = sum(p.cost for p in positions(self.ledger, self.mode)
-                        if p.ticker in lp_tickers and not p.decided)
+        # A position paired off by an offer holds no contracts and ties up nothing, whatever it cost.
+        inventory = sum(max(p.cost, 0.0) for p in positions(self.ledger, self.mode)
+                        if p.ticker in lp_tickers and not p.decided and p.contracts > 0)
         return resting + inventory, held, {(o["ticker"], o["side"]) for o in orders}
 
     def place(self, programs, by_ticker, books, stamp: float) -> int:
         at_risk, held, quoted = self.exposure()
         budget = self.c.capital_fraction * self.risk.bankroll
-        slots = self.c.max_quotes - len(quoted)
+        # Offers on held positions do not take a quote's place: they need no budget.
+        slots = self.c.max_quotes - sum(1 for o in self.my_orders() if o["kind"] != "lp_close")
         placed = 0
-        self.trimmed_away = 0
+        self.trimmed_away = self.offered_out = 0
         # A post-only order is refused when the book moved between reading it and placing the order.
         # That market is repricing; leave it alone for a while instead of trying again every cycle.
         cooling = {r["ticker"] for r in self.ledger.query(
@@ -231,9 +246,10 @@ class LiquidityProvider:
         # $1, so handing a slot to whichever market ranks best this cycle throws away what the last one earned.
         # A quote pulled because its reference moved comes straight back here at the new reference.
         committed = self.committed(programs)
-        ranked = lp.rank(programs, by_ticker, books, self.c, self.risk.bankroll, stamp, self.earned, committed)
+        ranked = lp.rank(programs, by_ticker, books, self.c, self.risk.bankroll, stamp, self.earned, committed, held)
         # Stable sort: markets not yet quoted keep their net-yield order, after the committed ones.
-        ranked.sort(key=lambda s: (s.ticker not in committed, -self.earned.get(s.ticker, 0.0)))
+        # Offers on held positions come first: they need no budget and free some when they fill.
+        ranked.sort(key=lambda s: (not s.closing, s.ticker not in committed, -self.earned.get(s.ticker, 0.0)))
         # One piece of news can fill every quote in a family at once (17 gas-price markets on 2026-11-20),
         # so no family gets more than a few markets, counting the ones where a position is already held.
         family_cap = int(self.c.get("max_markets_per_family") or 0)
@@ -241,7 +257,7 @@ class LiquidityProvider:
         for ticker, _ in list(quoted) + list(held):
             in_family[lp.family(ticker, self.c)].add(ticker)
         for sq in ranked:
-            if slots <= 0 or at_risk >= budget:
+            if not sq.closing and (slots <= 0 or at_risk >= budget):
                 break
             if sq.ticker in cooling:
                 continue
@@ -251,10 +267,11 @@ class LiquidityProvider:
             key = (sq.ticker, sq.side)
             if key in quoted or held.get(key, 0) >= self.c.contracts_per_side:
                 continue        # already quoting, or already carrying a full position on this side
-            if at_risk + sq.at_risk > budget:
+            if not sq.closing and at_risk + sq.at_risk > budget:
                 continue
             q = by_ticker[sq.ticker]
-            verdict = self.risk.review(Sizing(sq.side, sq.price, 0.0, 0.0, 0.0, sq.contracts), sq.ticker, q.event_ticker)
+            verdict = self.risk.review(Sizing(sq.side, sq.price, 0.0, 0.0, 0.0, sq.contracts), sq.ticker, q.event_ticker,
+                                       closing=sq.closing)
             if set(verdict.reasons) & {"halted", "max_open_orders", "max_orders_per_hour"}:
                 break           # an account-wide limit: nothing further can be placed this cycle
             if verdict.ok and verdict.contracts < sq.contracts:
@@ -269,7 +286,7 @@ class LiquidityProvider:
                     continue
                 sq = part
             decision = {
-                "id": new_id(), "kind": "lp_quote", "ticker": sq.ticker, "event_ticker": q.event_ticker,
+                "id": new_id(), "kind": "lp_close" if sq.closing else "lp_quote", "ticker": sq.ticker, "event_ticker": q.event_ticker,
                 "cluster": q.event_ticker, "created_ts": now(), "mode": self.mode, "strategy": "lp",
                 "yes_bid": q.yes_bid, "yes_ask": q.yes_ask, "mid": q.mid if q.two_sided else None,
                 "side": sq.side, "limit_price": sq.price, "fee": 0.0, "edge": sq.net_yield_day(self.c),
@@ -289,8 +306,9 @@ class LiquidityProvider:
                 continue
             if ok:
                 placed += 1
-                slots -= 1
+                slots -= 0 if sq.closing else 1
                 quoted.add(key)
                 fam.add(sq.ticker)
-                at_risk += sq.price * verdict.contracts
+                at_risk += 0.0 if sq.closing else sq.price * verdict.contracts
+                self.offered_out += sq.closing
         return placed

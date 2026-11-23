@@ -45,14 +45,15 @@ def collect(ledger: Ledger, cfg) -> dict:
 
     resting = []
     for o in ledger.query(
-            """SELECT o.ticker, o.side, o.price, o.contracts, o.created_ts, o.expires_ts, d.strategy, d.reasons,
+            """SELECT o.ticker, o.side, o.price, o.contracts, o.created_ts, o.expires_ts, d.strategy, d.reasons, d.kind,
                       o.contracts - COALESCE((SELECT SUM(f.contracts) FROM fills f WHERE f.client_order_id = o.client_order_id), 0) AS remaining
                FROM orders o JOIN decisions d ON d.id = o.decision_id
                WHERE o.mode=? AND o.status IN ('resting','partial') ORDER BY o.price * o.contracts DESC""", [mode]):
         reasons = o["reasons"] if isinstance(o["reasons"], list) else json.loads(o["reasons"] or "[]")
         reward = next((float(x.split("=")[1]) for x in reasons if isinstance(x, str) and x.startswith("reward_day=")), None)
         resting.append({"ticker": o["ticker"], "side": o["side"], "price": o["price"], "contracts": o["remaining"],
-                        "at_risk": o["price"] * o["remaining"], "reward_day": reward, "created_ts": o["created_ts"],
+                        # An offer on a held position pairs it off when it fills: nothing new at risk.
+                        "at_risk": 0.0 if o["kind"] == "lp_close" else o["price"] * o["remaining"], "reward_day": reward, "created_ts": o["created_ts"],
                         "expires_ts": o["expires_ts"], "strategy": o["strategy"], **_title(ledger, o["ticker"])})
 
     fills = [{"ts": f["ts"], "ticker": f["ticker"], "side": f["side"], "price": f["price"], "contracts": f["contracts"],

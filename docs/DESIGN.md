@@ -57,6 +57,14 @@ In shadow mode the reward is an estimate: each cycle the bot scores the live boo
 - **Pause.** `lp.exclude_families` lists ticker prefixes that are not quoted; quotes already resting there are pulled (`family_paused`).
 - **Run-time settings** (`overrides.py`). `pmbot set`, `unset`, `pause` and `unpause` store changes to `lp.*` in the bot's ledger; the reward strategy re-reads them at the top of every step. Each change is logged as a `setting_changed` risk event. Hard limits and anything outside `lp` are refused. The intended use is a quick experiment, usually on the twin, that is then either promoted into the config file or unset.
 
+### Offering out filled positions
+
+A filled quote leaves a position that ties up budget until its market settles, which can be months. With `lp.offer_out_positions` on, the bot rests an offer on each position: a bid on the other side for exactly the contracts held, at that side's reference price. A YES and a NO contract in one market pair off into $1, so buying NO at 94c against YES held is selling the YES at 6c. The offer earns the program's reward like any quote. A fill closes the position at the going price and frees the budget.
+
+Such an order (decision kind `lp_close`) puts nothing new at risk, so the per-quote cap, the budget, the payout floor and the yield rule do not apply to it, and it does not count as dollars at risk. It is cancelled the moment it is larger than the position it closes (`position_gone`), so it can never open a position on the other side.
+
+The setting is off by default and is not for the live bot yet. On paper the pairing is the ledger's own arithmetic. On the exchange an offsetting order has to be sent so that it can only reduce a position, and how Kalshi margins it must be checked on the demo exchange first.
+
 ## Strategy 2: forecast blend
 
 - **Universe.** Non-sports events priced 15–85¢, spread ≤ 4¢, at least 20 contracts on both sides, closing in 2–60 days. Newer listings first. Politics, elections and financials are forecast and scored but not traded until they prove out.

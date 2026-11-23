@@ -72,7 +72,11 @@ class RiskManager:
 
     # --- per-order checks --------------------------------------------------
 
-    def review(self, sizing: Sizing, ticker: str, cluster: str, acct: Account | None = None) -> Verdict:
+    def review(self, sizing: Sizing, ticker: str, cluster: str, acct: Account | None = None,
+               closing: bool = False) -> Verdict:
+        """`closing` is an order that only pairs off a position already held (the caller sizes it to the
+        position). It adds no exposure and needs no cash, so the room checks do not apply to it; the halt
+        and the order-count limits do."""
         reasons: list[str] = []
         if self.halted:
             return Verdict(False, 0, ["halted"])
@@ -83,9 +87,10 @@ class RiskManager:
 
         # Only the unfilled remainder of an order is still at risk of filling; the filled part is a position.
         resting = self.ledger.query(
-            "SELECT o.ticker, m.event_ticker, o.price * (o.contracts - COALESCE("
-            "(SELECT SUM(f.contracts) FROM fills f WHERE f.client_order_id = o.client_order_id), 0)) AS cost "
-            "FROM orders o LEFT JOIN markets m ON m.ticker = o.ticker "
+            # An offer on a held position (kind 'lp_close') pairs it off when it fills: no dollars at risk.
+            "SELECT o.ticker, m.event_ticker, CASE WHEN d.kind = 'lp_close' THEN 0 ELSE o.price * (o.contracts - COALESCE("
+            "(SELECT SUM(f.contracts) FROM fills f WHERE f.client_order_id = o.client_order_id), 0)) END AS cost "
+            "FROM orders o LEFT JOIN markets m ON m.ticker = o.ticker LEFT JOIN decisions d ON d.id = o.decision_id "
             "WHERE o.mode=? AND o.status IN ('resting','partial','submitting')", [self.mode])
         if len(resting) >= self.r.max_open_orders:
             return Verdict(False, 0, ["max_open_orders"])
@@ -93,6 +98,9 @@ class RiskManager:
                                  [self.mode, int(time.time()) - 3600])["n"]
         if recent >= self.r.max_orders_per_hour:
             return Verdict(False, 0, ["max_orders_per_hour"])
+
+        if closing:
+            return Verdict(True, sizing.contracts, ["closing"])
 
         def exposure(match) -> float:
             held = sum(p.cost for p in acct.open_positions if match(p.ticker, p.event_ticker))

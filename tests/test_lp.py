@@ -397,6 +397,73 @@ def test_a_quote_the_risk_limits_cut_down_is_placed_only_if_the_part_still_earns
         assert [o["remaining"] for o in provider.my_orders() if o["side"] == "yes"] == placed
 
 
+def filled_yes_position(**lp_over):
+    """A provider holding 50 YES at 39c in T-1 with nothing resting: its bid filled, the other side was pulled."""
+    from pmbot.ledger.db import new_id
+    provider, ledger = sticky_provider(**lp_over)
+    provider.risk.bankroll = 2000.0
+    quotes, books = {"T-1": quote()}, {"T-1": (YES, NO)}
+    assert provider.place({"T-1": program()}, quotes, books, 0.0) == 2
+    for o in provider.my_orders():
+        if o["side"] == "no":
+            provider.broker.cancel(o["client_order_id"], "test")
+            continue
+        ledger.insert("fills", {"id": new_id(), "client_order_id": o["client_order_id"], "ticker": "T-1", "side": "yes",
+                                "price": o["price"], "contracts": o["remaining"], "fee": 0.0, "ts": 1, "simulated": True})
+        ledger.execute("UPDATE orders SET status='filled' WHERE client_order_id=?", [o["client_order_id"]])
+    assert provider.my_orders() == [] and provider.exposure()[1] == {("T-1", "yes"): 50}
+    return provider, ledger, quotes, books
+
+
+def test_a_filled_position_is_offered_out_on_the_other_side_with_nothing_new_at_risk():
+    """The twin's fills tied up $22 of its $60 until settlement; an offer on them earns rewards and frees it."""
+    from pmbot.ledger.db import new_id
+    from pmbot.portfolio import positions
+
+    off, _, quotes, books = filled_yes_position()                          # the setting is off by default
+    off.place({"T-1": program()}, quotes, books, 0.0)
+    assert [o for o in off.my_orders() if o["kind"] == "lp_close"] == []
+
+    provider, ledger, quotes, books = filled_yes_position(offer_out_positions=True)
+    held_cost = provider.exposure()[0]
+    assert held_cost == pytest.approx(50 * 0.39)
+    provider.place({"T-1": program()}, quotes, books, 0.0)
+    [offer] = provider.my_orders()                                         # no second YES bid: the position is full
+    # A NO bid at its reference for exactly the 50 contracts held: selling the YES at 45c.
+    assert (offer["kind"], offer["side"], offer["price"], offer["remaining"]) == ("lp_close", "no", 0.55, 50)
+    assert provider.exposure()[0] == pytest.approx(held_cost)              # the offer adds nothing to dollars at risk
+    assert provider.risk.review(lp_runner_sizing("yes", 0.39, 10), "T-9", "E-9").ok   # nor does it use up cash or caps
+    # It is not judged on yield or the payout floor: a thin program does not pull it.
+    assert provider.prune(provider.my_orders(), {"T-1": program(reward_day=0.01, end_ts=3600)}, quotes, books, 0.0) == 0
+
+    ledger.insert("fills", {"id": new_id(), "client_order_id": offer["client_order_id"], "ticker": "T-1", "side": "no",
+                            "price": 0.55, "contracts": 50, "fee": 0.0, "ts": 2, "simulated": True})
+    ledger.execute("UPDATE orders SET status='filled' WHERE client_order_id=?", [offer["client_order_id"]])
+    [p] = positions(ledger, "shadow")
+    assert p.contracts == 0 and p.cost == pytest.approx(50 * 0.39 + 50 * 0.55 - 50)   # paired off: $3 better than cost
+    assert provider.exposure()[0] == 0 and provider.exposure()[1] == {}    # the budget is free again
+
+
+def test_an_offer_never_outlives_the_position_it_closes():
+    """Left resting after its position is gone, a 50-contract NO bid at 55c would open a position no cap checked."""
+    provider, ledger, quotes, books = filled_yes_position(offer_out_positions=True)
+    provider.place({"T-1": program()}, quotes, books, 0.0)
+    ledger.insert("markets", {"ticker": "T-1", "result": "no", "status": "finalized"})   # the market settles
+    assert provider.prune(provider.my_orders(), {"T-1": program()}, quotes, books, 0.0) == 1
+    assert dict(provider.cancel_reasons) == {"position_gone": 1}
+
+    provider, ledger, quotes, books = filled_yes_position(offer_out_positions=True)
+    provider.place({"T-1": program()}, quotes, books, 0.0)
+    provider.c = config.Config({**dict(provider.c), "offer_out_positions": False})        # switched off at run time
+    assert provider.prune(provider.my_orders(), {"T-1": program()}, quotes, books, 0.0) == 1
+    assert dict(provider.cancel_reasons) == {"offers_switched_off": 1}
+
+
+def lp_runner_sizing(side, price, contracts):
+    from pmbot.blend import Sizing
+    return Sizing(side, price, 0.0, 0.0, 0.0, contracts)
+
+
 def test_bids_below_the_minimum_price_are_neither_placed_nor_kept():
     """A 1c bid is only filled by someone unloading a nearly worthless contract."""
     cheap = quote(yes_bid=0.02, yes_ask=0.05, last_price=0.03, previous_price=0.03)

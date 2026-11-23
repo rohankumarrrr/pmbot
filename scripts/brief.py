@@ -18,7 +18,7 @@ import time
 KEEP = ["process_running", "minutes_since_last_cycle", "halted", "gaps_over_30_min", "cycles_logged_total",
         "cycle_failures_total", "last_failure_line", "since_last_checkin", "resting_orders", "orders_in_last_hour",
         "exchange_check_now", "self_check_bad_streak", "exchange_balance", "money"]
-REWARD = ["resting_quotes", "dollars_at_risk_resting", "estimated_rewards", "estimated_rewards_per_day", "fills",
+REWARD = ["resting_quotes", "dollars_at_risk_resting", "offers_on_held_positions", "estimated_rewards", "estimated_rewards_per_day", "fills",
           "inventory_cost", "inventory_marked", "trading_pnl_realized", "trading_pnl_unrealized"]
 
 
@@ -54,10 +54,14 @@ def twin(path: str = "data/ledger_twin.sqlite") -> None:
     one = lambda sql, *a: db.execute(sql, a).fetchone()
     now = time.time()
     print("twin resting: quotes %d, at risk $%.2f, average $%.2f" % one(
-        "SELECT COUNT(*), COALESCE(SUM(price*contracts),0), COALESCE(AVG(price*contracts),0) FROM orders WHERE status IN ('resting','partial')"))
+        "SELECT COUNT(*), COALESCE(SUM(price*contracts),0), COALESCE(AVG(price*contracts),0) FROM orders o "
+        "WHERE status IN ('resting','partial') AND (SELECT kind FROM decisions d WHERE d.id=o.decision_id) != 'lp_close'"))
+    print("  offers on held positions:", one("SELECT COUNT(*) FROM orders o WHERE status IN ('resting','partial') "
+                                             "AND (SELECT kind FROM decisions d WHERE d.id=o.decision_id) = 'lp_close'")[0])
     for band, n, risk in db.execute(
             "SELECT CASE WHEN price<0.15 THEN 'under 15c' WHEN price<0.50 THEN '15-50c' ELSE '50c+' END, COUNT(*), SUM(price*contracts) "
-            "FROM orders WHERE status IN ('resting','partial') GROUP BY 1"):
+            "FROM orders o WHERE status IN ('resting','partial') "
+            "AND (SELECT kind FROM decisions d WHERE d.id=o.decision_id) != 'lp_close' GROUP BY 1"):
         print(f"  {band}: {n} quotes, ${risk:.2f}")
     print("  largest family (markets):", one("SELECT COALESCE(MAX(n),0) FROM (SELECT COUNT(DISTINCT ticker) n FROM orders "
                                            "WHERE status IN ('resting','partial') GROUP BY substr(ticker,1,8))")[0])

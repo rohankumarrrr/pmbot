@@ -189,7 +189,10 @@ def lp_report(ledger: Ledger, mode: str) -> dict:
     hours = ((acc["t1"] or 0) - (first_order or 0)) / 3600 if acc["n"] else 0.0
     resting = ledger.one(
         "SELECT COUNT(*) AS n, COALESCE(SUM(o.price*o.contracts),0) AS at_risk FROM orders o JOIN decisions d ON d.id=o.decision_id "
-        "WHERE o.mode=? AND d.strategy='lp' AND o.status IN ('resting','partial')", [mode])
+        "WHERE o.mode=? AND d.strategy='lp' AND d.kind != 'lp_close' AND o.status IN ('resting','partial')", [mode])
+    offers = ledger.one(
+        "SELECT COUNT(*) AS n FROM orders o JOIN decisions d ON d.id=o.decision_id "
+        "WHERE o.mode=? AND d.kind='lp_close' AND o.status IN ('resting','partial')", [mode])["n"]
     lp_tickers = {r["ticker"] for r in ledger.query("SELECT DISTINCT ticker FROM decisions WHERE mode=? AND strategy='lp'", [mode])}
     held = [p for p in positions(ledger, mode) if p.ticker in lp_tickers]
     realized = sum(p.payout - p.cost for p in held if p.settled)
@@ -206,6 +209,7 @@ def lp_report(ledger: Ledger, mode: str) -> dict:
     return {
         "mode": mode, "hours_running": round(hours, 2),
         "resting_quotes": resting["n"], "dollars_at_risk_resting": round(resting["at_risk"], 2),
+        "offers_on_held_positions": offers,
         "estimated_rewards": round(rewards, 4),
         "rewards_by_program": by_program,
         "estimated_rewards_per_day": round(rewards / hours * 24, 2) if hours > 0 else None,

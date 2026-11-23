@@ -163,6 +163,7 @@ class SideQuote:
     reward_day: float       # expected dollars per day from this order
     at_risk: float          # dollars lost if it fills and the market goes fully against it
     queue_ahead: float
+    closing: bool = False   # an offer on a position already held: a fill pairs the two off, so nothing new is at risk
 
     @property
     def yield_day(self) -> float:
@@ -265,6 +266,20 @@ def resized(sq: SideQuote, contracts: int, prog: Program, q: Quote, book: tuple[
                      sq.price * contracts, sq.queue_ahead)
 
 
+def closing_quote(sq: SideQuote, contracts: int, prog: Program, q: Quote, book: tuple[Levels, Levels]) -> SideQuote:
+    """An offer on a position already held: a bid on the other side for exactly the contracts held.
+
+    A YES and a NO contract in one market pair off into $1, so buying NO at 94c against YES held is
+    selling that YES at 6c. Resting at the reference price it earns the program's reward like any
+    other quote, and it puts no new money at risk: a fill only closes the position, at the going
+    price, and frees what the position was tying up. So it is not sized by the per-quote cap, the
+    budget or the payout floor. It is never larger than the position, so it cannot open a new one.
+    """
+    part = resized(sq, contracts, prog, q, book)
+    return SideQuote(part.ticker, part.side, part.price, contracts, part.share, part.reward_day, 0.0,
+                     part.queue_ahead, closing=True)
+
+
 def worth_quoting(sq: SideQuote, prog: Program, lp, now: float, accrued: float, committed: bool) -> bool:
     """Whether a quote of this size earns its place: the program can reach its payout, and the reward covers the fills.
 
@@ -291,20 +306,26 @@ def family(ticker: str, lp) -> str:
 
 def rank(programs: dict[str, Program], quotes: dict[str, Quote], books: dict[str, tuple[Levels, Levels]],
          lp, bankroll: float, now: float, accrued: dict[str, float] | None = None,
-         committed: set[str] | None = None) -> list[SideQuote]:
+         committed: set[str] | None = None, held: dict[tuple[str, str], float] | None = None) -> list[SideQuote]:
     """Every eligible side quote, best net yield (reward less expected fill cost) per dollar at risk first.
 
     `accrued` is what the account has already earned (estimated) in each program's current period.
     `committed` are markets already quoted this period: they only have to reach the payout floor itself,
     while a new market has to clear it with a margin.
+    `held` is contracts held by (ticker, side). With `lp.offer_out_positions` on, the side opposite a
+    held position is quoted for exactly the contracts held (see `closing_quote`).
     """
-    accrued, committed = accrued or {}, committed or set()
+    accrued, committed, held = accrued or {}, committed or set(), held or {}
     out: list[SideQuote] = []
     for ticker, prog in programs.items():
         q, book = quotes.get(ticker), books.get(ticker)
         if q is None or book is None or market_reasons(prog, q, lp, now, ticker in committed):
             continue
         for sq in plan_market(prog, q, book, lp.contracts_per_side, lp, now):
+            have = int(held.get((ticker, "no" if sq.side == "yes" else "yes"), 0)) if lp.get("offer_out_positions") else 0
+            if have >= 1:
+                out.append(closing_quote(sq, have, prog, q, book))
+                continue
             if sq.price < lp.get("min_bid_price", 0) - 1e-9:
                 continue        # a bid this cheap is only ever filled by someone unloading a nearly worthless contract
             # Size down expensive sides so no single quote risks more than the per-quote cap.

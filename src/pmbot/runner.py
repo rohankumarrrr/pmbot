@@ -100,7 +100,8 @@ class Runner:
             "resting_at_risk": one(
                 "SELECT COALESCE(SUM(o.price * (o.contracts - COALESCE((SELECT SUM(f.contracts) FROM fills f "
                 "WHERE f.client_order_id = o.client_order_id), 0))), 0) AS v FROM orders o "
-                "WHERE o.mode=? AND o.status IN ('resting','partial')"),
+                "LEFT JOIN decisions d ON d.id = o.decision_id "
+                "WHERE o.mode=? AND o.status IN ('resting','partial') AND COALESCE(d.kind,'') != 'lp_close'"),
             "estimated_rewards": one("SELECT COALESCE(SUM(usd), 0) AS v FROM lp_accruals WHERE mode=?"),
             "credited": credited,
         }, replace=True)
