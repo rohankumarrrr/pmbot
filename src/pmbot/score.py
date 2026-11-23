@@ -10,7 +10,7 @@ import yaml
 
 from .blend import logit
 from .ledger.db import Ledger
-from .portfolio import mark_price, positions
+from .portfolio import mark_price, position_value, positions
 
 
 def resolved(ledger: Ledger, mode: str) -> pd.DataFrame:
@@ -197,9 +197,8 @@ def lp_report(ledger: Ledger, mode: str) -> dict:
     for p in held:
         if p.settled or p.contracts <= 0:
             continue
-        mid = mark_price(ledger, p.ticker)
         open_cost += p.cost
-        open_value += p.contracts * (mid if p.side == "yes" else 1 - mid) if mid is not None else p.cost
+        open_value += position_value(ledger, p)[0]
     fills = ledger.one("SELECT COUNT(*) AS n, COALESCE(SUM(f.contracts),0) AS c FROM fills f JOIN orders o ON o.client_order_id=f.client_order_id "
                        "JOIN decisions d ON d.id=o.decision_id WHERE o.mode=? AND d.strategy='lp'", [mode])
     rewards = acc["usd"]

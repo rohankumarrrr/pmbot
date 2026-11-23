@@ -234,12 +234,17 @@ def unsettled(ledger: Ledger, open_tickers: set[str], stamp: int | None = None) 
     rows = ledger.query(
         "SELECT DISTINCT d.ticker, m.close_ts FROM decisions d JOIN markets m ON m.ticker = d.ticker "
         "WHERE m.result IS NULL")
-    return [r["ticker"] for r in rows
-            if (r["close_ts"] is not None and r["close_ts"] < cutoff) or (open_tickers and r["ticker"] not in open_tickers)]
+    out = [r["ticker"] for r in rows
+           if (r["close_ts"] is not None and r["close_ts"] < cutoff) or (open_tickers and r["ticker"] not in open_tickers)]
+    # A position whose result is announced but not yet paid is followed until the exchange finalizes it.
+    awaiting = ledger.query(
+        "SELECT DISTINCT f.ticker FROM fills f JOIN markets m ON m.ticker = f.ticker "
+        "WHERE m.result IS NOT NULL AND m.status IN ('determined','disputed','amended')")
+    return out + [r["ticker"] for r in awaiting if r["ticker"] not in set(out)]
 
 
 def sync_settlements(client: KalshiClient, ledger: Ledger, tickers: list[str]) -> int:
-    """Refresh status and result for markets we hold an interest in. Returns how many settled."""
+    """Refresh status and result for markets we hold an interest in. Returns how many got a result or were paid."""
     settled = 0
     for i in range(0, len(tickers), 40):
         chunk = tickers[i:i + 40]
@@ -248,8 +253,12 @@ def sync_settlements(client: KalshiClient, ledger: Ledger, tickers: list[str]) -
         if missing:
             hist = client.get("/historical/markets", tickers=",".join(missing), limit=1000).get("markets") or []
             found.update({m["ticker"]: m for m in hist})
+        was = {r["ticker"]: (r["status"], r["result"]) for r in ledger.query(
+            f"SELECT ticker, status, result FROM markets WHERE ticker IN ({','.join('?' * len(found))})", list(found))} if found else {}
         for t, m in found.items():
             result = m.get("result") or None
+            if was.get(t) == (m.get("status"), result):
+                continue                    # nothing new: a market waiting to be paid is asked about every cycle
             ledger.execute(
                 "UPDATE markets SET status=?, result=?, settlement_ts=?, updated_ts=? WHERE ticker=?",
                 [m.get("status"), result, ts(m.get("settlement_ts")), now(), t],

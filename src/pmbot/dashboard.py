@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from .ledger.db import Ledger
-from .portfolio import mark_price, positions
+from .portfolio import mark_price, position_value, positions
 
 MAX_POINTS = 500
 
@@ -38,10 +38,9 @@ def collect(ledger: Ledger, cfg) -> dict:
             continue
         if p.contracts <= 0:
             continue
-        mid = mark_price(ledger, p.ticker)
-        value = p.contracts * (mid if p.side == "yes" else 1 - mid) if mid is not None else p.cost
+        value, priced = position_value(ledger, p)
         held.append({"ticker": p.ticker, "side": p.side, "contracts": p.contracts, "cost": p.cost, "value": value,
-                     "priced": mid is not None, "strategy": strategy_of.get(p.ticker, ""), **_title(ledger, p.ticker)})
+                     "priced": priced, "strategy": strategy_of.get(p.ticker, ""), **_title(ledger, p.ticker)})
     held.sort(key=lambda r: r["value"] - r["cost"])
 
     resting = []

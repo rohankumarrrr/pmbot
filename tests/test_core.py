@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from pmbot import config
+from pmbot import catalog, config
 from pmbot.blend import blend, calibrate, kelly_fraction, size_order
 from pmbot.execution.brokers import ShadowBroker, book_order, client_order_id
 from pmbot.kalshi.fees import fee_per_contract, order_fee
@@ -176,6 +176,22 @@ def test_account_tracks_cost_and_settlement(ledger):
     ledger.execute("UPDATE markets SET result='yes' WHERE ticker='S-E1-A'")
     acct = account(ledger, "shadow", 1000)
     assert acct.cash == pytest.approx(1006) and acct.realized == pytest.approx(6) and not acct.open_positions
+
+
+def test_an_announced_result_is_valued_at_its_payout_but_is_not_cash_until_the_exchange_pays(ledger):
+    """Kalshi marks a market 'determined' hours before it is 'finalized' and the money moves."""
+    from pmbot.portfolio import mark_to_market
+    fill(ledger, "a", "S-E1-A", "yes", 0.40, 10)
+    ledger.execute("UPDATE markets SET result='yes', status='determined' WHERE ticker='S-E1-A'")
+    acct = account(ledger, "shadow", 1000)
+    assert acct.cash == pytest.approx(996) and acct.realized == 0 and len(acct.open_positions) == 1   # not paid yet
+    assert mark_to_market(ledger, acct) == pytest.approx(1006)       # but equity already counts the $10 it will pay
+    assert catalog.unsettled(ledger, set()) == ["S-E1-A"]            # and the bot keeps asking until it is paid
+    ledger.execute("UPDATE markets SET status='finalized' WHERE ticker='S-E1-A'")
+    acct = account(ledger, "shadow", 1000)
+    assert acct.cash == pytest.approx(1006) and acct.realized == pytest.approx(6) and not acct.open_positions
+    assert mark_to_market(ledger, acct) == pytest.approx(1006)       # equity is the same before and after the payout
+    assert catalog.unsettled(ledger, set()) == []
 
 
 def test_losing_position_and_no_side_payout(ledger):

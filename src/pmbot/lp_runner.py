@@ -198,9 +198,9 @@ class LiquidityProvider:
         lp_tickers = {r["ticker"] for r in self.ledger.query(
             "SELECT DISTINCT ticker FROM decisions WHERE mode=? AND strategy='lp'", [self.mode])}
         held = {(p.ticker, p.side): p.contracts for p in positions(self.ledger, self.mode)
-                if p.ticker in lp_tickers and not p.settled and p.contracts > 0}
+                if p.ticker in lp_tickers and not p.decided and p.contracts > 0}
         inventory = sum(p.cost for p in positions(self.ledger, self.mode)
-                        if p.ticker in lp_tickers and not p.settled)
+                        if p.ticker in lp_tickers and not p.decided)
         return resting + inventory, held, {(o["ticker"], o["side"]) for o in orders}
 
     def place(self, programs, by_ticker, books, stamp: float) -> int:
