@@ -80,6 +80,11 @@ def twin(path: str = "data/ledger_twin.sqlite") -> None:
         if total:
             print(f"  accrual {label} (leaving out markets last quoted at 1c-2c and since dropped): ${total:.2f}, of which in programs under $1 no longer quoted ${left:.2f} ({100 * left / total:.0f}%)")
     fills = db.execute("SELECT COUNT(*), COALESCE(SUM(price*contracts+fee),0), MAX(ts) FROM fills").fetchone()
+    try:    # why quotes were pulled in the last hour (recorded per order since 2026-11-23)
+        for r in db.execute("SELECT ticker, side, price, reason, detail FROM lp_cancels WHERE ts>? ORDER BY ts", (now - 3600,)):
+            print(f"  pulled {r[0][:34]} {r[1]}@{r[2]:.2f} {r[3]} {r[4]}")
+    except sqlite3.OperationalError:
+        pass    # a ledger from before the table existed
     print("  fills: %d, cost $%.2f, latest %s UTC" % (fills[0], fills[1], time.strftime("%m-%d %H:%M", time.gmtime(fills[2])) if fills[2] else "none"))
 
 

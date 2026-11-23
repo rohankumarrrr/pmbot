@@ -156,6 +156,10 @@ def test_cancel_reasons_are_counted_for_the_cycle_log():
     moved = [(0.41, 300)] + YES
     assert provider.prune(provider.my_orders(), programs, quotes, {"T-1": (moved, no)}, 0.0) == 1
     assert dict(provider.cancel_reasons) == {"reference_moved": 1}
+    # Each cancel is recorded with its reason and the numbers behind it.
+    [row] = ledger.query("SELECT side, price, reason, detail FROM lp_cancels")
+    assert (row["side"], row["price"], row["reason"]) == ("yes", 0.39, "reference_moved")
+    assert __import__("json").loads(row["detail"])["ref"] == 0.41
 
 
 # --- staying in a program until it pays ---------------------------------------

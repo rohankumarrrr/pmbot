@@ -168,6 +168,21 @@ CREATE TABLE IF NOT EXISTS lp_accruals (
 );
 CREATE INDEX IF NOT EXISTS lp_accruals_ticker ON lp_accruals(ticker);
 
+-- Why each reward quote was pulled, with the numbers the decision was made on.
+CREATE TABLE IF NOT EXISTS lp_cancels (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts               INTEGER,
+    mode             TEXT,
+    ticker           TEXT,
+    side             TEXT,
+    client_order_id  TEXT,
+    price            REAL,
+    contracts        REAL,     -- still resting when it was pulled
+    reason           TEXT,
+    detail           TEXT      -- JSON: reference price, share, yields, what was banked, days left in the program
+);
+CREATE INDEX IF NOT EXISTS lp_cancels_ticker ON lp_cancels(ticker);
+
 CREATE TABLE IF NOT EXISTS risk_events (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     ts      INTEGER,

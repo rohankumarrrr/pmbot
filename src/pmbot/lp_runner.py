@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections import Counter, defaultdict
 
@@ -143,7 +144,7 @@ class LiquidityProvider:
         sides = Counter(o["ticker"] for o in orders)
         for o in orders:
             prog, q, book = programs.get(o["ticker"]), by_ticker.get(o["ticker"]), books.get(o["ticker"])
-            reason = None
+            reason, why = None, {}
             if not prog or not q or not book:
                 reason = "program_or_market_gone"
             elif lp.market_reasons(prog, q, self.c, stamp, committed=True):      # an order here means we are committed
@@ -154,6 +155,7 @@ class LiquidityProvider:
                 other = book[1] if o["side"] == "yes" else book[0]
                 side = lp.score_side(levels if self.mode != "shadow" else lp.with_order(levels, o["price"], o["remaining"]),
                                      prog.target, prog.discount, tick)
+                why = {"ref": side.ref, "best": levels[0][0] if levels else None}
                 if o["price"] < self.c.get("min_bid_price", 0) - 1e-9:
                     reason = "bid_too_cheap"
                 elif not side.qualifies:
@@ -169,12 +171,20 @@ class LiquidityProvider:
                     net = gross + self.c.fill_prob_day * lp.fill_return(o["price"], self.c)
                     # The program's accrual is shared between our quotes there, so each side protects its part.
                     banked = self.earned.get(o["ticker"], 0.0) / max(sides.get(o["ticker"], 1), 1)
+                    why.update(share=round(share, 4), gross_yield_day=round(gross, 4), net_yield_day=round(net, 4),
+                               banked=round(self.earned.get(o["ticker"], 0.0), 4), days_left=round(days_left, 2),
+                               program_rate_day=round(rate.get(o["ticker"], 0.0), 4))
                     if net < 0 and not lp.worth_staying(banked, net, o["price"] * o["remaining"], days_left, self.c):
                         reason = "yield_below_fill_cost"     # the pool got crowded, or the ranking rules changed
                     elif self.earned.get(o["ticker"], 0.0) + rate.get(o["ticker"], 0.0) * days_left < lp.MIN_PAYOUT:
                         reason = "cannot_reach_payout"       # resting here takes fill risk for a reward that will not be paid
             if reason:
                 self.broker.cancel(o["client_order_id"], reason)
+                # Kept per order: which rule pulled a quote, and on what numbers, is how a leak of rewards is traced.
+                self.ledger.insert("lp_cancels", {
+                    "ts": int(stamp), "mode": self.mode, "ticker": o["ticker"], "side": o["side"],
+                    "client_order_id": o["client_order_id"], "price": o["price"], "contracts": o["remaining"],
+                    "reason": reason, "detail": json.dumps(why)})
                 self.cancel_reasons[reason] += 1
                 n += 1
         return n
