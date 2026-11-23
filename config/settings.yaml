@@ -68,6 +68,7 @@ lp:   # liquidity provision in markets that pay Kalshi liquidity rewards
   keep_committed_while_accrued: false   # true: do not leave a program on yield while that would forfeit more than staying is expected to cost
   exclude_categories: [Sports, Crypto, Mentions]
   exclude_families: []          # ticker prefixes switched off by hand, e.g. [KXAAAGAS]; `pmbot pause KXAAAGAS` adds one while the bot runs
+  min_bid_price: 0.0            # dollars; bids below this are not placed and are pulled. Paper, 5 days: 12 fills at 1c-2c cost $8.50, worth $2.00, against $3.84 of estimated rewards
   max_markets_per_family: 3     # markets quoted or held per family (first family_prefix_len letters of the series); 0 = no cap
   family_prefix_len: 8
   exchange_indexes: [0]         # exchange shards the account holds cash on; markets on others are not quoted

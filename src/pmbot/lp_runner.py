@@ -151,7 +151,9 @@ class LiquidityProvider:
                 other = book[1] if o["side"] == "yes" else book[0]
                 side = lp.score_side(levels if self.mode != "shadow" else lp.with_order(levels, o["price"], o["remaining"]),
                                      prog.target, prog.discount, tick)
-                if not side.qualifies:
+                if o["price"] < self.c.get("min_bid_price", 0) - 1e-9:
+                    reason = "bid_too_cheap"
+                elif not side.qualifies:
                     reason = "side_below_target"
                 elif other and o["price"] + other[0][0] >= 1.0 - 1e-9:
                     reason = "would_cross"          # the other side came to us: this is now the touch

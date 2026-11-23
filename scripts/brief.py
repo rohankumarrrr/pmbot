@@ -65,15 +65,20 @@ def twin(path: str = "data/ledger_twin.sqlite") -> None:
                                                 "GROUP BY ticker) WHERE f>?", now - 3600)[0])
     print("  accrued in the last hour: $%.3f" % (one("SELECT COALESCE(SUM(usd),0) FROM lp_accruals WHERE ts>?", now - 3600)[0]))
     quoted = {r[0] for r in db.execute("SELECT DISTINCT ticker FROM orders WHERE status IN ('resting','partial')")}
+    # Markets dropped by the minimum-bid experiment are not that experiment's "abandoned programs".
+    cheap = {r[0] for r in db.execute("SELECT ticker FROM orders o WHERE created_ts=(SELECT MAX(created_ts) FROM orders x "
+                                      "WHERE x.ticker=o.ticker AND x.status!='rejected') AND price<=0.02")}
     for label, since in (("since 09:12 today's experiment 3 began (2026-11-23 15:12 UTC)", 1795446720.0), ("last 24h", now - 86400)):
         total = left = 0.0
         for ticker, usd, whole in db.execute(
                 "SELECT ticker, SUM(CASE WHEN ts>? THEN usd ELSE 0 END), SUM(usd) FROM lp_accruals GROUP BY ticker", (since,)):
+            if ticker in cheap and ticker not in quoted:
+                continue
             total += usd
             if ticker not in quoted and whole < 1.0:
                 left += usd
         if total:
-            print(f"  accrual {label}: ${total:.2f}, of which in programs under $1 no longer quoted ${left:.2f} ({100 * left / total:.0f}%)")
+            print(f"  accrual {label} (leaving out markets last quoted at 1c-2c and since dropped): ${total:.2f}, of which in programs under $1 no longer quoted ${left:.2f} ({100 * left / total:.0f}%)")
     fills = db.execute("SELECT COUNT(*), COALESCE(SUM(price*contracts+fee),0), MAX(ts) FROM fills").fetchone()
     print("  fills: %d, cost $%.2f, latest %s UTC" % (fills[0], fills[1], time.strftime("%m-%d %H:%M", time.gmtime(fills[2])) if fills[2] else "none"))
 

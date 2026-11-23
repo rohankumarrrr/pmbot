@@ -367,3 +367,18 @@ def test_a_program_with_rewards_banked_is_not_left_just_because_yield_dipped():
     off.earned = {"T-1": 0.90}
     off.prune(off.my_orders(), thin, quotes, books, 0.0)
     assert off.cancel_reasons["yield_below_fill_cost"] >= 1
+
+
+def test_bids_below_the_minimum_price_are_neither_placed_nor_kept():
+    """A 1c bid is only filled by someone unloading a nearly worthless contract."""
+    cheap = quote(yes_bid=0.02, yes_ask=0.05, last_price=0.03, previous_price=0.03)
+    books = {"T-1": ([(0.02, 600), (0.01, 900)], [(0.95, 400), (0.94, 900)])}
+    provider, ledger = sticky_provider()
+    assert provider.place({"T-1": program()}, {"T-1": cheap}, books, 0.0) >= 1          # no minimum: the 2c bid is quoted
+    assert any(o["price"] == 0.02 for o in provider.my_orders())
+    provider.c = config.Config({**provider.base, "min_bid_price": 0.03})                # what a run-time change does at the next step
+    provider.prune(provider.my_orders(), {"T-1": program()}, {"T-1": cheap}, books, 0.0)
+    assert provider.cancel_reasons["bid_too_cheap"] == 1
+    assert not any(o["price"] < 0.03 for o in provider.my_orders())
+    provider.place({"T-1": program()}, {"T-1": cheap}, books, 0.0)
+    assert not any(o["price"] < 0.03 for o in provider.my_orders())                      # and it does not come back

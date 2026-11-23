@@ -281,6 +281,8 @@ def rank(programs: dict[str, Program], quotes: dict[str, Quote], books: dict[str
         if q is None or book is None or market_reasons(prog, q, lp, now, ticker in committed):
             continue
         for sq in plan_market(prog, q, book, lp.contracts_per_side, lp, now):
+            if sq.price < lp.get("min_bid_price", 0) - 1e-9:
+                continue        # a bid this cheap is only ever filled by someone unloading a nearly worthless contract
             # Size down expensive sides so no single quote risks more than the per-quote cap.
             cap = lp.max_at_risk_per_quote
             if sq.at_risk > cap:
