@@ -271,3 +271,73 @@ def test_a_committed_quote_stays_through_the_programs_last_hours():
         provider.broker.cancel(o["client_order_id"], "reference_moved")                    # a requote in the last hours
     assert provider.place(ending, quotes, books, 0.0) == 2                                # comes back to T-1
     assert {r["ticker"] for r in ledger.query("SELECT ticker FROM orders WHERE status='resting'")} == {"T-1"}   # T-2 is new: kept out
+
+
+# --- changing settings while the bot runs ---------------------------------------
+
+def test_a_setting_changed_at_run_time_applies_on_the_next_step_and_can_be_undone():
+    from pmbot import overrides
+
+    provider, ledger = sticky_provider()
+    base = provider.base
+    assert overrides.effective(base, ledger, "shadow").requote_ticks == base["requote_ticks"]
+    assert overrides.put(ledger, "shadow", base, "lp.requote_ticks", 5, "test") == base["requote_ticks"]
+    assert overrides.effective(base, ledger, "shadow").requote_ticks == 5
+    assert provider.c.requote_ticks == base["requote_ticks"]           # not yet: the bot picks it up at its next step
+    provider.data = type("NoPrograms", (), {"get": lambda *a, **k: {"incentive_programs": []}, "paginate": lambda *a, **k: iter(())})()
+    provider.programs = lambda: {"T-1": program()}                      # skip the exchange; the step still re-reads settings
+    lp.fetch_books, saved = (lambda data, tickers: {}), lp.fetch_books
+    try:
+        stats = provider.step({"T-1": quote()})
+    finally:
+        lp.fetch_books = saved
+    assert provider.c.requote_ticks == 5 and stats["lp_settings_changed_at_run_time"] == ["requote_ticks"]
+    assert [r["kind"] for r in ledger.query("SELECT kind FROM risk_events")] == ["setting_changed"]   # logged with its reason
+
+    assert overrides.drop(ledger, "shadow", base, "requote_ticks") is True
+    assert overrides.effective(base, ledger, "shadow").requote_ticks == base["requote_ticks"]
+
+
+def test_hard_limits_and_wrong_values_are_refused_at_run_time():
+    from pmbot import overrides
+
+    provider, ledger = sticky_provider()
+    for setting, value in (("lp.max_at_risk_per_quote", 50.0),        # Rohan's limit
+                           ("lp.capital_fraction", 0.9),              # Rohan's limit
+                           ("risk.max_drawdown", 0.9),                # not a reward-strategy setting at all
+                           ("lp.requote_ticks", "many"),              # wrong kind of value
+                           ("lp.no_such_setting", 1)):
+        with pytest.raises(ValueError):
+            overrides.put(ledger, "shadow", provider.base, setting, value)
+    assert overrides.load(ledger, "shadow") == {} and ledger.query("SELECT 1 FROM risk_events") == []
+
+
+def test_pausing_a_family_pulls_its_quotes_and_keeps_it_out():
+    from pmbot import overrides
+
+    provider, ledger = sticky_provider()
+    programs = {"GAS-AK-1": program(ticker="GAS-AK-1"), "RAIN-NY-1": program(ticker="RAIN-NY-1")}
+    quotes = {t: quote(ticker=t) for t in programs}
+    books = {t: (YES, NO) for t in programs}
+    assert provider.place(programs, quotes, books, 0.0) == 4
+    assert overrides.pause(ledger, "shadow", provider.base, "GAS", "answer is published on a schedule") == ["GAS"]
+    provider.c = overrides.effective(provider.base, ledger, "shadow")   # what the next step does
+    assert provider.prune(provider.my_orders(), programs, quotes, books, 0.0) == 2
+    assert dict(provider.cancel_reasons) == {"family_paused": 2}
+    assert provider.place(programs, quotes, books, 0.0) == 0            # and it does not come back
+    assert {o["ticker"] for o in provider.my_orders()} == {"RAIN-NY-1"}
+    assert overrides.unpause(ledger, "shadow", provider.base, "GAS") == []
+    provider.c = overrides.effective(provider.base, ledger, "shadow")
+    assert provider.place(programs, quotes, books, 0.0) == 2
+
+
+def test_a_family_gets_only_a_few_markets():
+    """Seventeen gas-price markets filled on one piece of news; a family is capped, held positions included."""
+    provider, ledger = sticky_provider(max_markets_per_family=2, family_prefix_len=5)
+    tickers = ["KXGASAK-1", "KXGASTX-1", "KXGASNY-1", "KXRAINNY-1"]
+    programs = {t: program(ticker=t) for t in tickers}
+    quotes, books = {t: quote(ticker=t) for t in tickers}, {t: (YES, NO) for t in tickers}
+    provider.place(programs, quotes, books, 0.0)
+    quoted = {o["ticker"] for o in provider.my_orders()}
+    assert len({t for t in quoted if t.startswith("KXGAS")}) == 2 and "KXRAINNY-1" in quoted   # two gas markets, both sides each
+    assert len(provider.my_orders()) == 6

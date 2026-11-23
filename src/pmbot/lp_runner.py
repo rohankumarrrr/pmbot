@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 
-from . import lp
+from . import lp, overrides
 from .blend import Sizing
 from .catalog import Quote
 from .execution.brokers import Broker
@@ -20,7 +20,8 @@ LIVE_STATUSES = "('resting','partial','submitting')"
 
 class LiquidityProvider:
     def __init__(self, cfg, ledger: Ledger, data: KalshiClient, broker: Broker, risk: RiskManager, mode: str):
-        self.cfg, self.c = cfg, cfg.lp
+        self.cfg, self.base = cfg, dict(cfg["lp"])
+        self.c = cfg.lp          # replaced at the top of every step with the settings in force (see overrides.py)
         self.ledger, self.data, self.broker, self.risk, self.mode = ledger, data, broker, risk, mode
         self._programs: dict[str, lp.Program] = {}
         self._programs_ts = 0.0
@@ -55,6 +56,8 @@ class LiquidityProvider:
 
     def step(self, by_ticker: dict[str, Quote]) -> dict:
         stamp = time.time()
+        # Settings changed from the command line take effect here, on the next cycle, with no restart.
+        self.c = overrides.effective(self.base, self.ledger, self.mode)
         programs = self.programs() or self.synthetic_programs(by_ticker, stamp)
         orders = self.my_orders()
         committed = self.committed(programs)
@@ -62,6 +65,9 @@ class LiquidityProvider:
                     if t in by_ticker and not lp.market_reasons(p, by_ticker[t], self.c, stamp, t in committed)]
         books = lp.fetch_books(self.data, sorted(set(eligible) | {o["ticker"] for o in orders}))
         stats = {"lp_programs": len(programs), "lp_eligible_markets": len(eligible)}
+        changed = sorted(overrides.load(self.ledger, self.mode))
+        if changed:
+            stats["lp_settings_changed_at_run_time"] = changed
         stats["lp_accrued"] = round(self.accrue(orders, programs, by_ticker, books, stamp), 4)
         self.ledger.insert_many("lp_programs", [
             {"mode": self.mode, "ticker": t, "start_ts": int(programs[t].start_ts), "end_ts": int(programs[t].end_ts),
@@ -208,11 +214,20 @@ class LiquidityProvider:
         ranked = lp.rank(programs, by_ticker, books, self.c, self.risk.bankroll, stamp, self.earned, committed)
         # Stable sort: markets not yet quoted keep their net-yield order, after the committed ones.
         ranked.sort(key=lambda s: (s.ticker not in committed, -self.earned.get(s.ticker, 0.0)))
+        # One piece of news can fill every quote in a family at once (17 gas-price markets on 2026-11-20),
+        # so no family gets more than a few markets, counting the ones where a position is already held.
+        family_cap = int(self.c.get("max_markets_per_family") or 0)
+        in_family: dict[str, set[str]] = defaultdict(set)
+        for ticker, _ in list(quoted) + list(held):
+            in_family[lp.family(ticker, self.c)].add(ticker)
         for sq in ranked:
             if slots <= 0 or at_risk >= budget:
                 break
             if sq.ticker in cooling:
                 continue
+            fam = in_family[lp.family(sq.ticker, self.c)]
+            if family_cap and sq.ticker not in fam and len(fam) >= family_cap:
+                continue        # this family already has its share of markets
             key = (sq.ticker, sq.side)
             if key in quoted or held.get(key, 0) >= self.c.contracts_per_side:
                 continue        # already quoting, or already carrying a full position on this side
@@ -245,5 +260,6 @@ class LiquidityProvider:
                 placed += 1
                 slots -= 1
                 quoted.add(key)
+                fam.add(sq.ticker)
                 at_risk += sq.price * verdict.contracts
         return placed

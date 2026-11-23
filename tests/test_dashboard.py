@@ -39,6 +39,9 @@ def test_dashboard_shows_positions_quotes_fills_and_history():
     (quote,) = data["resting"]
     assert (quote["price"], quote["contracts"], quote["reward_day"]) == (0.25, 10, 0.75)
     assert data["fills_total"] == 1 and len(data["series"]) == 3 and data["latest"]["equity"] == 999.0
+    controls = data["controls"]
+    assert controls["which"] == "paper" and controls["paused"] == [] and "lp.max_at_risk_per_quote" in controls["locked"]
+    assert sum(f["markets"] for f in controls["families"]) >= 1 and sum(f["cost"] for f in controls["families"]) == 4.0
     page = render(data)
     assert "<b>it</b>" not in page.split('id="data">')[0]         # market text is only ever inserted as text, never as markup
     assert json.loads(page.split('id="data">')[1].split("</script>")[0])["mode"] == "shadow"

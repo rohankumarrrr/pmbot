@@ -100,6 +100,52 @@ def cmd_resume(args, cfg) -> None:
     print("resumed")
 
 
+def _show_settings(ledger, cfg) -> None:
+    from . import overrides
+    base = dict(cfg["lp"])
+    changed, now_ = overrides.load(ledger, cfg.mode), overrides.effective(base, ledger, cfg.mode)
+    print(json.dumps({
+        "mode": cfg.mode,
+        "changed_at_run_time": {f"lp.{k}": {"config_file": base.get(k), "now": now_.get(k)} for k in sorted(changed)},
+        "paused_families": now_.get("exclude_families") or [],
+        "hard_limits_not_adjustable_here": {f"lp.{k}": base.get(k) for k in sorted(overrides.LOCKED) if k in base},
+        "adjustable": {f"lp.{k}": now_[k] for k in sorted(now_) if k not in overrides.LOCKED},
+    }, indent=2))
+
+
+def cmd_set(args, cfg) -> None:
+    from . import overrides
+    ledger, base = Ledger(cfg.ledger_path), dict(cfg["lp"])
+    try:
+        before = overrides.put(ledger, cfg.mode, base, args.setting, overrides.parse(args.value), args.why)
+    except ValueError as e:
+        raise SystemExit(f"not changed: {e}")
+    print(f"{cfg.mode}: {args.setting} was {before!r}, now {overrides.parse(args.value)!r}; takes effect on the next cycle")
+
+
+def cmd_unset(args, cfg) -> None:
+    from . import overrides
+    ledger, base = Ledger(cfg.ledger_path), dict(cfg["lp"])
+    try:
+        had = overrides.drop(ledger, cfg.mode, base, args.setting, args.why)
+    except ValueError as e:
+        raise SystemExit(f"not changed: {e}")
+    print(f"{cfg.mode}: {args.setting} is back to the config file's value" if had else f"{cfg.mode}: {args.setting} was not changed at run time")
+
+
+def cmd_pause(args, cfg) -> None:
+    from . import overrides
+    ledger, base = Ledger(cfg.ledger_path), dict(cfg["lp"])
+    fn = overrides.unpause if args.cmd == "unpause" else overrides.pause
+    families = fn(ledger, cfg.mode, base, args.prefix, args.why)
+    print(f"{cfg.mode}: paused families now {families}; takes effect on the next cycle"
+          + ("" if args.cmd == "unpause" else " (quotes resting there are pulled)"))
+
+
+def cmd_settings(args, cfg) -> None:
+    _show_settings(Ledger(cfg.ledger_path), cfg)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="pmbot")
     ap.add_argument("--config", default=None)
@@ -121,6 +167,22 @@ def main() -> None:
     h.add_argument("reason", nargs="?", default="manual")
     h.set_defaults(fn=cmd_halt)
     sub.add_parser("resume", help="clear a halt").set_defaults(fn=cmd_resume)
+    st = sub.add_parser("set", help="change a reward-strategy setting while the bot runs (next cycle, no restart)")
+    st.add_argument("setting", help="for example lp.max_markets_per_family")
+    st.add_argument("value", help="for example 2, 0.35, true or '[[0.15, -0.45], [0.50, -0.35]]'")
+    st.add_argument("--why", default="", help="reason, written to the risk-event log")
+    st.set_defaults(fn=cmd_set)
+    us = sub.add_parser("unset", help="go back to the config file's value for a setting")
+    us.add_argument("setting")
+    us.add_argument("--why", default="")
+    us.set_defaults(fn=cmd_unset)
+    for name, text in (("pause", "stop quoting every market whose ticker starts with PREFIX and pull its quotes"),
+                       ("unpause", "quote that family again")):
+        pz = sub.add_parser(name, help=text)
+        pz.add_argument("prefix", help="for example KXAAAGAS")
+        pz.add_argument("--why", default="")
+        pz.set_defaults(fn=cmd_pause)
+    sub.add_parser("settings", help="reward-strategy settings in force, and what was changed at run time").set_defaults(fn=cmd_settings)
     args = ap.parse_args()
     args.fn(args, config.load(args.config))
 

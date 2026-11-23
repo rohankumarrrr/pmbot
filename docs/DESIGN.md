@@ -51,6 +51,12 @@ What the bot does with them:
 
 In shadow mode the reward is an estimate: each cycle the bot scores the live book with its order added, and credits that share of the pool for the time since the last cycle. Fills are simulated from the trade tape with queue position. Only a live test can confirm what Kalshi actually credits.
 
+### Families, and settings changed while running
+
+- **Family cap.** Markets are grouped by the first 8 letters of their series name (`lp.family_prefix_len`), a crude stand-in for "moves on the same news". At most `lp.max_markets_per_family` (3) are quoted or held per family. On 2026-11-20 the live bot was filled in 17 gas-price markets, one per state, on one piece of news.
+- **Pause.** `lp.exclude_families` lists ticker prefixes that are not quoted; quotes already resting there are pulled (`family_paused`).
+- **Run-time settings** (`overrides.py`). `pmbot set`, `unset`, `pause` and `unpause` store changes to `lp.*` in the bot's ledger; the reward strategy re-reads them at the top of every step. Each change is logged as a `setting_changed` risk event. Hard limits and anything outside `lp` are refused. The intended use is a quick experiment, usually on the twin, that is then either promoted into the config file or unset.
+
 ## Strategy 2: forecast blend
 
 - **Universe.** Non-sports events priced 15–85¢, spread ≤ 4¢, at least 20 contracts on both sides, closing in 2–60 days. Newer listings first. Politics, elections and financials are forecast and scored but not traded until they prove out.

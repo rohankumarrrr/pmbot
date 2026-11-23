@@ -68,6 +68,28 @@ def collect(ledger: Ledger, cfg) -> dict:
     series = [dict(r) for i, r in enumerate(history) if i % step == 0 or i == len(history) - 1]
     latest = dict(history[-1]) if history else None
 
+    # Controls: what is quoted and held per family, and the settings changed while the bot runs.
+    from . import lp as lp_rules, overrides
+    base = dict(cfg["lp"])
+    in_force, changed = overrides.effective(base, ledger, mode), overrides.load(ledger, mode)
+    paused = list(in_force.get("exclude_families") or [])
+    fams: dict[str, dict] = {}
+    for r in resting:
+        f = fams.setdefault(lp_rules.family(r["ticker"], in_force), {"markets": set(), "resting": 0.0, "cost": 0.0, "value": 0.0})
+        f["markets"].add(r["ticker"]); f["resting"] += r["at_risk"]
+    for h in held:
+        f = fams.setdefault(lp_rules.family(h["ticker"], in_force), {"markets": set(), "resting": 0.0, "cost": 0.0, "value": 0.0})
+        f["markets"].add(h["ticker"]); f["cost"] += h["cost"]; f["value"] += h["value"]
+    families = sorted(({"family": k, "markets": len(v["markets"]), "resting": v["resting"], "cost": v["cost"], "value": v["value"],
+                        "paused": any(k.startswith(x) or x.startswith(k) for x in paused)} for k, v in fams.items()),
+                      key=lambda f: -(f["resting"] + f["cost"]))
+    which = "twin" if "twin" in str(cfg.ledger_path) else {"shadow": "paper"}.get(mode, mode)
+    controls = {
+        "which": which, "paused": paused, "family_cap": in_force.get("max_markets_per_family") or 0, "families": families,
+        "changed": [{"setting": f"lp.{k}", "config": json.dumps(base.get(k)), "now": json.dumps(in_force.get(k))} for k in sorted(changed)],
+        "locked": [f"lp.{k}" for k in sorted(overrides.LOCKED) if k in base],
+    }
+
     events = [dict(r) for r in ledger.query("SELECT ts, kind, substr(detail, 1, 220) AS detail FROM risk_events ORDER BY id DESC LIMIT 12")]
     peak = ledger.get_state(f"peak_equity:{key}")
     day_open = ledger.get_state(f"day_open_equity:{key}:{time.strftime('%Y-%m-%d', time.gmtime())}")
@@ -77,6 +99,7 @@ def collect(ledger: Ledger, cfg) -> dict:
         "peak": peak, "day_open": day_open, "max_drawdown": cfg.risk.max_drawdown, "daily_loss_limit": cfg.risk.daily_loss_limit,
         "positions": held, "settled_positions": settled_n, "realized": realized,
         "resting": resting, "fills": fills, "fills_total": n_fills, "events": events, "series": series,
+        "controls": controls,
     }
 
 
@@ -154,6 +177,10 @@ details summary{cursor:pointer;color:var(--ink2);font-size:12px;margin-top:8px}
 <section class="card"><h2>Open positions</h2><div class="sub" id="pos-sub"></div><div class="scroll" id="t-pos"></div></section>
 <section class="card"><h2>Resting quotes</h2><div class="sub" id="rest-sub"></div><div class="scroll" id="t-rest"></div></section>
 <section class="card"><h2>Recent fills</h2><div class="sub" id="fill-sub"></div><div class="scroll" id="t-fill"></div></section>
+<section class="card"><h2>Controls</h2><div class="sub" id="ctl-sub"></div>
+<div class="scroll" id="t-fam"></div><div class="scroll" id="t-chg"></div>
+<div class="sub" style="margin-top:12px">Run these in the project folder. A change takes effect on the bot's next cycle, with no restart, and is written to the events below with its reason.</div>
+<pre id="ctl-cmd" style="white-space:pre-wrap;font:12px ui-monospace,Menlo,monospace;color:var(--ink2);margin:8px 0 0"></pre></section>
 <section class="card"><h2>Risk events</h2><div class="sub">Halts, resumes, rejections and other things the bot flagged, newest first</div><div class="scroll" id="t-ev"></div></section>
 </div></div>
 <script type="application/json" id="data">__DATA__</script>
@@ -278,6 +305,23 @@ $('t-rest').append(table(['Market', 'Side', 'Price', 'Contracts', 'At risk', 'Es
 $('fill-sub').textContent = D.fills_total ? D.fills_total + ' in total; the latest ' + D.fills.length + ' shown' : '';
 $('t-fill').append(table(['Time', 'Market', 'Side', 'Price', 'Contracts', 'Cost'],
   D.fills.map(f => [when(f.ts), {market: f}, f.side.toUpperCase(), {n: cents(f.price)}, {n: f.contracts.toLocaleString()}, {n: usd(f.price * f.contracts + (f.fee || 0))}]), 'No fills yet.'));
+const C = D.controls, top = C.families.length ? C.families[0].family : 'KXAAAGAS';
+$('ctl-sub').textContent = 'Markets grouped by family (the first letters of the series name). At most ' + (C.family_cap || 'any number of') +
+  ' markets per family are quoted or held.' + (C.paused.length ? ' Paused: ' + C.paused.join(', ') + '.' : ' No family is paused.');
+$('t-fam').append(table(['Family', 'Markets', 'Resting at risk', 'Positions cost', 'Positions value now', 'State'],
+  C.families.map(f => [f.family, {n: String(f.markets)}, {n: usd(f.resting)}, {n: usd(f.cost)}, {n: usd(f.value)}, f.paused ? 'paused' : 'quoting']),
+  'Nothing quoted or held.'));
+if (C.changed.length) $('t-chg').append(table(['Setting changed while running', 'Config file', 'Now'], C.changed.map(c => [c.setting, c.config, c.now])));
+$('ctl-cmd').textContent = [
+  './scripts/control.sh ' + C.which + ' settings',
+  './scripts/control.sh ' + C.which + ' pause ' + top + ' --why "reason"',
+  './scripts/control.sh ' + C.which + ' unpause ' + top,
+  './scripts/control.sh ' + C.which + ' set lp.max_markets_per_family 2 --why "reason"',
+  './scripts/control.sh ' + C.which + ' set lp.contracts_per_side 100 --why "reason"',
+  './scripts/control.sh ' + C.which + ' unset lp.contracts_per_side',
+  '',
+  'Not adjustable here (hard limits, changed in the config file): ' + C.locked.join(', ') + ', and everything under risk and trading.',
+].join('\n');
 $('t-ev').append(table(['Time', 'Event', 'Detail'], D.events.map(e => [when(e.ts), e.kind.replace(/_/g, ' '), e.detail || '']), 'Nothing flagged.'));
 </script></body></html>
 """

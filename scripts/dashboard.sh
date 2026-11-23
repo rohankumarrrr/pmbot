@@ -2,6 +2,7 @@
 # Build the dashboard and open it in the browser.
 #   ./scripts/dashboard.sh            paper account (this machine)
 #   ./scripts/dashboard.sh demo       demo account (this machine)
+#   ./scripts/dashboard.sh twin       paper copy of the live bot (this machine)
 #   ./scripts/dashboard.sh live       live account: built on the server from its ledger, then copied here
 # The server's address comes from $PMBOT_SERVER or ~/.config/pmbot/server (one line, like user@host).
 cd "$(dirname "$0")/.."
@@ -15,6 +16,7 @@ if [[ "$which" == "live" ]]; then
 else
   source .venv/bin/activate
   [[ "$which" == "demo" ]] && export PMBOT_CONFIG=config/demo.yaml
+  [[ "$which" == "twin" ]] && export PMBOT_CONFIG=config/twin.yaml
   pmbot dashboard --out "$out" > /dev/null || exit 1
 fi
 echo "$PWD/$out"

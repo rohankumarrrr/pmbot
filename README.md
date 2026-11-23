@@ -30,7 +30,7 @@ Needs Python 3.12+ and, for forecasts, the [`claude` CLI](https://claude.com/cla
 ```sh
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-python -m pytest            # 84 tests, no network
+python -m pytest            # 88 tests, no network
 ```
 
 ## Running it
@@ -46,10 +46,21 @@ pmbot dashboard             # write data/dashboard.html: equity, positions, quot
 pmbot universe              # events the forecaster would consider
 pmbot halt "reason"         # kill switch: cancel everything and stop
 pmbot resume
+pmbot settings              # reward-strategy settings in force, and what was changed while running
+pmbot set lp.max_markets_per_family 2 --why "reason"    # takes effect on the next cycle, no restart
+pmbot unset lp.max_markets_per_family                   # back to the config file's value
+pmbot pause KXAAAGAS --why "reason"                     # stop quoting a family of markets and pull its quotes
+pmbot unpause KXAAAGAS
 ```
 
+### Changing settings while a bot runs
+
+The reward strategy's settings (`lp.*`) can be changed from the command line. The bot reads them at the top of every cycle, so a change needs no deploy and no restart; it is kept in that bot's ledger and written to its risk-event log with the reason. `scripts/control.sh <paper|demo|twin|live> ...` runs the same commands against the right bot (live over ssh), and the dashboard's Controls section shows what is quoted and held per family, what has been changed, and the commands.
+
+Use it to try something quickly, usually on the twin first. Once a change has earned its place, put it in the config file and `unset` it. The hard limits (`lp.max_at_risk_per_quote`, `lp.capital_fraction`, and everything under `risk` and `trading`) are refused at run time: they are changed in the config file.
+
 - `scripts/run_bot.sh` runs the paper loop, `scripts/run_bot.sh demo` the demo loop, and `scripts/run_bot.sh twin` a paper copy of the live bot at live size (`config/twin.yaml`). Both log to `logs/` and keep a Mac from idle-sleeping while they run.
-- `scripts/dashboard.sh [paper|demo|live]` builds the dashboard page and opens it. Kalshi's site does not show subaccounts, so this is the live account's portfolio screen.
+- `scripts/dashboard.sh [paper|demo|twin|live]` builds the dashboard page and opens it. Kalshi's site does not show subaccounts, so this is the live account's portfolio screen.
 - `scripts/check_consistency.py` compares the ledger with the exchange.
 - `scripts/checkin.py` prints a JSON health summary of both loops.
 - `scripts/gate1_demo_drill.py` runs seven execution drills against the demo exchange.

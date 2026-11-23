@@ -222,6 +222,8 @@ def market_reasons(prog: Program, q: Quote, lp, now: float, committed: bool = Fa
     out = []
     if q.category in lp.exclude_categories:
         out.append("category_excluded")
+    if any(q.ticker.startswith(prefix) for prefix in lp.get("exclude_families") or []):
+        out.append("family_paused")             # switched off by hand (`pmbot pause`); also pulls quotes already resting
     if q.exchange_index not in lp.get("exchange_indexes", [0]):
         out.append("other_exchange_shard")      # the account holds no cash there, so the order would be refused
     if q.fee_type != "quadratic":
@@ -238,6 +240,15 @@ def market_reasons(prog: Program, q: Quote, lp, now: float, committed: bool = Fa
 
 
 MIN_PAYOUT = 1.0     # Kalshi issues no payout under $1 for a program's period
+
+
+def family(ticker: str, lp) -> str:
+    """Markets that tend to move on the same news: the first letters of the series name.
+
+    KXAAAGASCDAK-26NOV21-T3.2 and KXAAAGASCDTX-26NOV21-T2.9 (gas prices in two states) are both KXAAAGAS.
+    It is a crude grouping, kept simple on purpose: it is used to cap how many markets of one kind are quoted.
+    """
+    return ticker.split("-")[0][: int(lp.get("family_prefix_len", 8))]
 
 
 def rank(programs: dict[str, Program], quotes: dict[str, Quote], books: dict[str, tuple[Levels, Levels]],
