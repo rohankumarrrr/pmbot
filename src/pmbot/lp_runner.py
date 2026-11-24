@@ -300,7 +300,7 @@ class LiquidityProvider:
             try:
                 # Rewards need orders that rest, so these carry a long expiry and are managed by prune().
                 ok = self.broker.place(decision["id"], sq.ticker, sq.side, sq.price, verdict.contracts,
-                                       ttl_s=7 * DAY, queue_ahead=sq.queue_ahead)
+                                       ttl_s=7 * DAY, queue_ahead=sq.queue_ahead, reduce_only=sq.closing)
             except Exception as e:
                 self.ledger.risk_event("order_submit_error", f"lp {sq.ticker}: {e!r}"[:500])
                 continue

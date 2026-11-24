@@ -57,7 +57,7 @@ class FakeExchange:
             self.orders[oid] = {"order_id": oid, "client_order_id": body["client_order_id"], "ticker": body["ticker"],
                                 "book_side": body["side"], "yes_price_dollars": body["price"], "status": "resting",
                                 "fill_count_fp": "0.00", "initial_count_fp": body["count"],
-                                "expiration_time": body.get("expiration_time")}
+                                "expiration_time": body.get("expiration_time"), "reduce_only": body["reduce_only"]}
             if self.fail_next_create == "drop":
                 self.fail_next_create = None
                 raise httpx.ReadTimeout("response lost", request=req)
@@ -121,6 +121,13 @@ def test_signed_order_rests_and_buying_no_becomes_a_yes_ask(rig):
     (order,) = exchange.orders.values()
     assert (order["book_side"], order["yes_price_dollars"], order["initial_count_fp"]) == ("ask", "0.4000", "10.00")
     assert status(ledger, "d1") == "resting"
+
+
+def test_an_offer_on_a_held_position_is_sent_reduce_only(rig):
+    exchange, broker, ledger = rig
+    broker.place("d1", "T-1", "yes", 0.40, 10, 3600)
+    broker.place("d2", "T-1", "no", 0.58, 10, 3600, reduce_only=True)
+    assert [o["reduce_only"] for o in exchange.orders.values()] == [False, True]
 
 
 def test_bad_signature_is_rejected(rig):

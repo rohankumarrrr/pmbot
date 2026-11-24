@@ -22,7 +22,7 @@ class Broker(Protocol):
     mode: str
 
     def place(self, decision_id: str, ticker: str, side: str, price: float, contracts: int, ttl_s: int,
-              queue_ahead: float = 0.0) -> str | None: ...
+              queue_ahead: float = 0.0, reduce_only: bool = False) -> str | None: ...
     def cancel(self, client_order_id: str, reason: str) -> None: ...
     def cancel_all(self, reason: str) -> None: ...
     def sync(self) -> int: ...
@@ -124,7 +124,7 @@ class ShadowBroker(_Base):
             self._set_expiry(o["client_order_id"], expires)
         return len(due)
 
-    def place(self, decision_id, ticker, side, price, contracts, ttl_s, queue_ahead=0.0) -> str | None:
+    def place(self, decision_id, ticker, side, price, contracts, ttl_s, queue_ahead=0.0, reduce_only=False) -> str | None:
         coid = client_order_id(decision_id)
         if self.ledger.one("SELECT 1 FROM orders WHERE client_order_id=?", [coid]):
             return coid
@@ -213,7 +213,7 @@ class KalshiBroker(_Base):
             self.ledger.set_state(key, gid)
         return gid
 
-    def place(self, decision_id, ticker, side, price, contracts, ttl_s, queue_ahead=0.0) -> str | None:
+    def place(self, decision_id, ticker, side, price, contracts, ttl_s, queue_ahead=0.0, reduce_only=False) -> str | None:
         coid = client_order_id(decision_id)
         if self.ledger.one("SELECT 1 FROM orders WHERE client_order_id=?", [coid]):
             return coid
@@ -223,7 +223,9 @@ class KalshiBroker(_Base):
         try:
             resp = self.client.create_order(
                 ticker, book_side, contracts, yes_price, coid, post_only=True,
-                expiration_ts=expires, order_group_id=self.order_group(), subaccount=self.subaccount)
+                expiration_ts=expires, order_group_id=self.order_group(), subaccount=self.subaccount,
+                # An offer on a held position must never open one on the other side, whatever the ledger believes.
+                reduce_only=reduce_only)
         except KalshiError as e:
             if e.code == "order_already_exists":   # an earlier attempt got through
                 self._set_status(coid, "resting")
