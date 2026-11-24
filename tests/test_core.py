@@ -194,6 +194,22 @@ def test_an_announced_result_is_valued_at_its_payout_but_is_not_cash_until_the_e
     assert catalog.unsettled(ledger, set()) == []
 
 
+def test_a_market_settled_between_yes_and_no_pays_its_settlement_value(ledger):
+    """Kalshi's third result, 'scalar': YES is paid the settlement value and NO the rest of the dollar."""
+    from pmbot.portfolio import mark_to_market
+    fill(ledger, "a", "S-E1-A", "yes", 0.40, 10)
+    fill(ledger, "b", "S-E2-A", "no", 0.70, 10)
+    ledger.execute("UPDATE markets SET result='scalar', status='finalized'")
+    acct = account(ledger, "shadow", 1000)                              # the value is not known yet:
+    assert len(acct.open_positions) == 2 and acct.realized == 0         # still open, nothing counted as paid
+    assert sorted(catalog.unsettled(ledger, set())) == ["S-E1-A", "S-E2-A"]   # and the bot asks the exchange for it
+    ledger.execute("UPDATE markets SET settlement_value=0.25")
+    acct = account(ledger, "shadow", 1000)
+    assert not acct.open_positions and catalog.unsettled(ledger, set()) == []
+    assert acct.realized == pytest.approx((10 * 0.25 - 4) + (10 * 0.75 - 7))  # YES paid 25c, NO paid 75c
+    assert acct.cash == pytest.approx(1000 - 4 - 7 + 2.5 + 7.5) == mark_to_market(ledger, acct)
+
+
 def test_losing_position_and_no_side_payout(ledger):
     fill(ledger, "a", "S-E1-A", "yes", 0.40, 10)
     fill(ledger, "b", "S-E2-A", "no", 0.70, 10)

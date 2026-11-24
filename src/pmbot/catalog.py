@@ -240,7 +240,12 @@ def unsettled(ledger: Ledger, open_tickers: set[str], stamp: int | None = None) 
     awaiting = ledger.query(
         "SELECT DISTINCT f.ticker FROM fills f JOIN markets m ON m.ticker = f.ticker "
         "WHERE m.result IS NOT NULL AND m.status IN ('determined','disputed','amended')")
-    return out + [r["ticker"] for r in awaiting if r["ticker"] not in set(out)]
+    # A held market settled at a value between yes and no, recorded before that value was stored.
+    valueless = ledger.query(
+        "SELECT DISTINCT f.ticker FROM fills f JOIN markets m ON m.ticker = f.ticker "
+        "WHERE m.result = 'scalar' AND m.settlement_value IS NULL")
+    seen = set(out)
+    return out + [r["ticker"] for r in list(awaiting) + list(valueless) if not (r["ticker"] in seen or seen.add(r["ticker"]))]
 
 
 def sync_settlements(client: KalshiClient, ledger: Ledger, tickers: list[str]) -> int:
@@ -253,15 +258,19 @@ def sync_settlements(client: KalshiClient, ledger: Ledger, tickers: list[str]) -
         if missing:
             hist = client.get("/historical/markets", tickers=",".join(missing), limit=1000).get("markets") or []
             found.update({m["ticker"]: m for m in hist})
-        was = {r["ticker"]: (r["status"], r["result"]) for r in ledger.query(
-            f"SELECT ticker, status, result FROM markets WHERE ticker IN ({','.join('?' * len(found))})", list(found))} if found else {}
+        was = {r["ticker"]: (r["status"], r["result"], r["settlement_value"]) for r in ledger.query(
+            f"SELECT ticker, status, result, settlement_value FROM markets WHERE ticker IN ({','.join('?' * len(found))})",
+            list(found))} if found else {}
         for t, m in found.items():
             result = m.get("result") or None
-            if was.get(t) == (m.get("status"), result):
+            # Only a 'scalar' result needs its value: YES was paid that many dollars, NO the rest.
+            value = m.get("settlement_value_dollars")
+            value = float(value) if result == "scalar" and value not in (None, "") else None
+            if was.get(t) == (m.get("status"), result, value):
                 continue                    # nothing new: a market waiting to be paid is asked about every cycle
             ledger.execute(
-                "UPDATE markets SET status=?, result=?, settlement_ts=?, updated_ts=? WHERE ticker=?",
-                [m.get("status"), result, ts(m.get("settlement_ts")), now(), t],
+                "UPDATE markets SET status=?, result=?, settlement_value=?, settlement_ts=?, updated_ts=? WHERE ticker=?",
+                [m.get("status"), result, value, ts(m.get("settlement_ts")), now(), t],
             )
-            settled += result in ("yes", "no")
+            settled += result in ("yes", "no") or value is not None
     return settled

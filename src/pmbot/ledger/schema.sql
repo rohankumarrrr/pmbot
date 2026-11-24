@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS markets (
     status                  TEXT,
     result                  TEXT,
     settlement_ts           INTEGER,
+    settlement_value        REAL,     -- dollars a YES contract paid; set for a 'scalar' result, which is neither yes nor no
     first_seen_ts           INTEGER,
     updated_ts              INTEGER
 );

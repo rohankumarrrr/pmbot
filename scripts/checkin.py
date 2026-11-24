@@ -59,7 +59,7 @@ for name in WANTED:
             "orders_placed": q("SELECT COUNT(*) AS n FROM orders WHERE mode=? AND created_ts>?", mode, since),
             "orders_cancelled": q("SELECT COUNT(*) AS n FROM orders WHERE mode=? AND status='cancelled' AND updated_ts>?", mode, since),
             "fills": q("SELECT COUNT(*) AS n FROM fills f JOIN orders o ON o.client_order_id=f.client_order_id WHERE o.mode=? AND f.ts>?", mode, since),
-            "markets_settled": q("SELECT COUNT(*) AS n FROM markets WHERE result IN ('yes','no') AND updated_ts>?", since),
+            "markets_settled": q("SELECT COUNT(*) AS n FROM markets WHERE result IN ('yes','no','scalar') AND updated_ts>?", since),
             "risk_events": [dict(r) for r in ledger.query(
                 "SELECT datetime(ts,'unixepoch','localtime') AS at, kind, substr(detail,1,200) AS detail FROM risk_events WHERE ts>? ORDER BY id DESC LIMIT 8", [since])],
         },

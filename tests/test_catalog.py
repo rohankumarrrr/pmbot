@@ -90,6 +90,21 @@ def test_a_market_settled_before_its_listed_close_is_still_picked_up():
     assert catalog.unsettled(ledger, {"S-E1-A", "S-E1-C"}, stamp) == []                    # and it is not asked for again
 
 
+def test_a_scalar_result_is_stored_with_its_settlement_value():
+    class Scalar(Exchange):
+        def get(self, path, **params):
+            return {"markets": [{**market(t), "status": "finalized", "result": "scalar", "settlement_value_dollars": "0.2500"}
+                                for t in params["tickers"].split(",")]}
+
+    ledger = Ledger(":memory:")
+    catalog.pull_open_quotes(Exchange(["S-E1-A"]), ledger, SERIES)
+    ledger.execute("UPDATE markets SET result='scalar', status='finalized' WHERE ticker='S-E1-A'")   # recorded before the value was kept
+    assert catalog.sync_settlements(Scalar([]), ledger, ["S-E1-A"]) == 1
+    row = ledger.one("SELECT result, settlement_value FROM markets WHERE ticker='S-E1-A'")
+    assert (row["result"], row["settlement_value"]) == ("scalar", 0.25)
+    assert catalog.sync_settlements(Scalar([]), ledger, ["S-E1-A"]) == 0                             # nothing new the second time
+
+
 def test_a_position_left_by_a_cancelled_order_is_still_priced():
     """An order that filled in part and was then cancelled ends as 'cancelled'; what it bought must stay watched."""
     ledger = Ledger(":memory:")

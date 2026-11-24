@@ -27,6 +27,10 @@ class Ledger:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(resources.files("pmbot.ledger").joinpath("schema.sql").read_text())
+        # Columns added after a ledger was first created (CREATE TABLE IF NOT EXISTS leaves an old table as it is).
+        for table, column, kind in (("markets", "settlement_value", "REAL"),):
+            if column not in {r["name"] for r in self.db.execute(f"PRAGMA table_info({table})")}:
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
         self.db.commit()
 
     def close(self) -> None:

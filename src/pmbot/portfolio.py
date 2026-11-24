@@ -17,12 +17,26 @@ class Position:
     side: str            # 'yes' / 'no'
     contracts: float     # net of offsetting fills on the other side
     cost: float          # dollars paid for the net position, fees included
-    result: str | None   # the market's outcome, once it is known
+    result: str | None   # the market's outcome, once it is known: 'yes', 'no' or 'scalar'
     status: str | None = None   # the market's status on the exchange
+    settlement_value: float | None = None   # dollars a YES contract paid, for a 'scalar' result
+
+    @property
+    def yes_value(self) -> float | None:
+        """Dollars one YES contract pays, once the outcome is known. Kalshi can settle a market at a value
+        between the two ('scalar', with a settlement value): YES is paid that value and NO the rest of
+        the dollar. Treating only yes and no as outcomes left such a position open at its last price for
+        good, and on a real account its payout would have shown up as cash the ledger could not explain,
+        which is how rewards are measured."""
+        if self.result in ("yes", "no"):
+            return 1.0 if self.result == "yes" else 0.0
+        if self.result == "scalar" and self.settlement_value is not None:
+            return float(self.settlement_value)
+        return None
 
     @property
     def decided(self) -> bool:
-        return self.result in ("yes", "no")
+        return self.yes_value is not None
 
     @property
     def settled(self) -> bool:
@@ -35,18 +49,20 @@ class Position:
 
     @property
     def payout(self) -> float:
-        return self.contracts if self.settled and self.result == self.side else 0.0
+        return self.decided_value if self.settled else 0.0
 
     @property
     def decided_value(self) -> float:
         """What the position is worth once the outcome is known, paid or not."""
-        return self.contracts if self.result == self.side else 0.0
+        if not self.decided:
+            return 0.0
+        return self.contracts * (self.yes_value if self.side == "yes" else 1.0 - self.yes_value)
 
 
 def positions(ledger: Ledger, mode: str) -> list[Position]:
     """Net position per market. A YES and a NO contract in one market pair off into $1."""
     rows = ledger.query(
-        """SELECT f.ticker, m.event_ticker, m.result, m.status,
+        """SELECT f.ticker, m.event_ticker, m.result, m.status, m.settlement_value,
                   SUM(CASE WHEN f.side='yes' THEN f.contracts ELSE 0 END) AS yes_n,
                   SUM(CASE WHEN f.side='no'  THEN f.contracts ELSE 0 END) AS no_n,
                   SUM(f.price * f.contracts + f.fee) AS paid
@@ -60,7 +76,8 @@ def positions(ledger: Ledger, mode: str) -> list[Position]:
         paired = min(r["yes_n"], r["no_n"])           # each pair is worth exactly $1
         net = r["yes_n"] - r["no_n"]
         side = "yes" if net >= 0 else "no"
-        out.append(Position(r["ticker"], r["event_ticker"] or "", side, abs(net), r["paid"] - paired, r["result"], r["status"]))
+        out.append(Position(r["ticker"], r["event_ticker"] or "", side, abs(net), r["paid"] - paired, r["result"], r["status"],
+                            r["settlement_value"]))
     return out
 
 
