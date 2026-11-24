@@ -206,6 +206,24 @@ def test_a_market_quoted_this_period_keeps_its_slot_when_its_quotes_are_pulled()
     assert {r["ticker"] for r in resting} == {"T-2"}                    # back into T-2, not off to the better-ranked T-1
 
 
+def test_room_goes_first_to_the_program_with_rewards_still_at_stake():
+    """With room for one market, a program at $0.83 comes back before one already past $1."""
+    provider, ledger = sticky_provider(max_quotes=4, fill_prob_day=0.0)      # no fill cost: this is about ordering only
+    provider.risk.bankroll = 4000.0
+    programs = {t: program(ticker=t, reward_day=40.0, end_ts=2 * 86400) for t in ("T-1", "T-2")}
+    quotes = {"T-1": quote(), "T-2": quote(ticker="T-2")}
+    books = {"T-1": (YES, NO), "T-2": (YES, NO)}
+    assert provider.place(programs, quotes, books, 0.0) == 4
+    # The pools shrink to the twin's size: each quote would earn well under a dollar in the two days left.
+    programs = {t: program(ticker=t, reward_day=10.0, end_ts=2 * 86400) for t in ("T-1", "T-2")}
+    for o in provider.my_orders():
+        provider.broker.cancel(o["client_order_id"], "reference_moved")      # both markets' quotes are pulled to be moved
+    provider.c = config.Config({**dict(provider.c), "max_quotes": 2})        # and there is room for one market only
+    provider.earned = {"T-1": 1.30, "T-2": 0.83}
+    assert provider.place(programs, quotes, books, 0.0) == 2
+    assert {o["ticker"] for o in provider.my_orders()} == {"T-2"}            # was T-1: the larger sum banked, none of it at risk
+
+
 def test_a_committed_market_only_has_to_reach_the_floor_itself():
     cfg, now = config.load("config/settings.yaml"), 1_000_000
     small = {"T-1": program(reward_day=10.0, end_ts=now + 86400)}       # a quote there adds about 36c by the end

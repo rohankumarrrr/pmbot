@@ -230,6 +230,19 @@ class LiquidityProvider:
                         if p.ticker in lp_tickers and not p.decided and p.contracts > 0)
         return resting + inventory, held, {(o["ticker"], o["side"]) for o in orders}
 
+    def worth_returning_to(self, sq: lp.SideQuote, programs, stamp: float) -> float:
+        """Dollars of reward that quoting a committed market again would secure, for ordering them when
+        room is short (the budget, or the cap on one event).
+
+        What the quote would still earn by the end of the period, plus what is already banked there if the
+        program has not reached $1 yet: that part is lost unless the program gets there. Ordering by what
+        was banked alone gave the room to a program already past $1, which loses nothing by waiting, and
+        left one at $0.83 out of its own event (twin, 2026-11-24).
+        """
+        prog, banked = programs[sq.ticker], self.earned.get(sq.ticker, 0.0)
+        still = sq.reward_day * max((prog.end_ts - stamp) / DAY, 0)
+        return still + (banked if banked < lp.MIN_PAYOUT else 0.0)
+
     def place(self, programs, by_ticker, books, stamp: float) -> int:
         at_risk, held, quoted = self.exposure()
         budget = self.c.capital_fraction * self.risk.bankroll
@@ -249,7 +262,7 @@ class LiquidityProvider:
         ranked = lp.rank(programs, by_ticker, books, self.c, self.risk.bankroll, stamp, self.earned, committed, held)
         # Stable sort: markets not yet quoted keep their net-yield order, after the committed ones.
         # Offers on held positions come first: they need no budget and free some when they fill.
-        ranked.sort(key=lambda s: (not s.closing, s.ticker not in committed, -self.earned.get(s.ticker, 0.0)))
+        ranked.sort(key=lambda s: (not s.closing, s.ticker not in committed, -self.worth_returning_to(s, programs, stamp)))
         # One piece of news can fill every quote in a family at once (17 gas-price markets on 2026-11-20),
         # so no family gets more than a few markets, counting the ones where a position is already held.
         family_cap = int(self.c.get("max_markets_per_family") or 0)
