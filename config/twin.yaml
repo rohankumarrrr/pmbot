@@ -7,3 +7,10 @@ extends: live.yaml
 mode: shadow
 bankroll_usd: 100
 ledger_path: data/ledger_twin.sqlite
+
+lp:
+  # Live's per-market cap is 5% of what the account holds, $77.17 on 2026-11-24, so a live quote would be
+  # $3.86, not $5. The twin quotes that size, so that what it shows about reaching the $1 floor holds for
+  # live. Its budget stays at $60: with $22 held in positions that leaves about $38 for quotes, close to
+  # live's $40 ($46 budget less $6 held).
+  max_at_risk_per_quote: 3.85
