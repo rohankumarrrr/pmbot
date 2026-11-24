@@ -482,6 +482,25 @@ def lp_runner_sizing(side, price, contracts):
     return Sizing(side, price, 0.0, 0.0, 0.0, contracts)
 
 
+def test_a_quote_must_qualify_several_cycles_running_before_it_is_first_placed():
+    """One placement in five was pulled a cycle later: the market had only looked good for one reading of the book."""
+    provider, ledger = sticky_provider(enter_after_cycles=2)
+    provider.risk.bankroll = 2000.0
+    programs, quotes, books = {"T-1": program()}, {"T-1": quote()}, {"T-1": (YES, NO)}
+    assert provider.place(programs, quotes, books, 0.0) == 0             # first sighting
+    assert provider.place({}, quotes, books, 0.0) == 0                   # gone from the ranking: the count starts again
+    assert provider.place(programs, quotes, books, 0.0) == 0
+    assert provider.place(programs, quotes, books, 0.0) == 2             # two cycles running
+
+    # A quote pulled to follow its price is placed again at once, in the same step.
+    moved = [(0.41, 300)] + YES                                          # the YES reference is now two ticks above our bid
+    assert provider.prune(provider.my_orders(), programs, quotes, {"T-1": (moved, NO)}, 0.0) == 1
+    fresh = sticky_provider(enter_after_cycles=2)[0]                     # the same book seen by a bot with no history
+    assert fresh.place(programs, quotes, {"T-1": (moved, NO)}, 0.0) == 0
+    assert provider.place(programs, quotes, {"T-1": (moved, NO)}, 0.0) == 1
+    assert sorted((o["side"], o["price"]) for o in provider.my_orders()) == [("no", 0.55), ("yes", 0.41)]
+
+
 def test_bids_below_the_minimum_price_are_neither_placed_nor_kept():
     """A 1c bid is only filled by someone unloading a nearly worthless contract."""
     cheap = quote(yes_bid=0.02, yes_ask=0.05, last_price=0.03, previous_price=0.03)

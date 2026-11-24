@@ -65,6 +65,8 @@ lp:   # liquidity provision in markets that pay Kalshi liquidity rewards
   fill_prob_day: 0.25           # chance per day that a quote fills. Measured 2026-11-17 on paper: 0.22 under 15c, 0.42 at 15-50c (20 fills); was assumed 0.10
   fill_return: [[0.15, -0.45], [0.50, -0.15], [0.85, 0.05], [1.01, 0.02]]   # [price below, return]
   min_expected_payout: 1.5      # a program pays nothing under $1 for its period
+  enter_after_cycles: 1        # cycles in a row a quote must qualify before it is first placed. 2 keeps the bot out of markets that
+                               # look good for one reading of the book: one placement in five was pulled again a cycle later
   offer_out_positions: false   # true: rest an offer on each filled position (a bid on the other side for the contracts held). Not for live until the exchange's handling of an offsetting order is checked on demo.
   keep_committed_while_accrued: false   # true: do not leave a program on yield while that would forfeit more than staying is expected to cost
   exclude_categories: [Sports, Crypto, Mentions]

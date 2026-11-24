@@ -29,6 +29,8 @@ class LiquidityProvider:
         self.cancel_reasons: Counter = Counter()
         self.trimmed_away = 0                   # quotes skipped this step because the risk limits left too small a part
         self.offered_out = 0                    # offers placed this step on positions already held
+        self.qualified: dict[tuple[str, str], int] = {}   # cycles in a row each (market, side) has ranked as worth quoting
+        self.moved: set[str] = set()            # markets whose quote was pulled this step only to follow its price
         self.earned: dict[str, float] = {}      # estimated dollars accrued per program this period; set each step
 
     def programs(self) -> dict[str, lp.Program]:
@@ -143,6 +145,7 @@ class LiquidityProvider:
         """Cancel quotes that stopped earning or drifted away from the reference price."""
         n = 0
         self.cancel_reasons = Counter()
+        self.moved = set()
         rate = self.reward_rates(orders, programs, by_ticker, books)
         sides = Counter(o["ticker"] for o in orders)
         held = self.exposure()[1]
@@ -199,6 +202,8 @@ class LiquidityProvider:
                     "client_order_id": o["client_order_id"], "price": o["price"], "contracts": o["remaining"],
                     "reason": reason, "detail": json.dumps(why)})
                 self.cancel_reasons[reason] += 1
+                if reason in ("reference_moved", "would_cross"):
+                    self.moved.add(o["ticker"])
                 n += 1
         return n
 
@@ -265,6 +270,12 @@ class LiquidityProvider:
         ranked.sort(key=lambda s: (not s.closing, s.ticker not in committed, -self.worth_returning_to(s, programs, stamp)))
         # One piece of news can fill every quote in a family at once (17 gas-price markets on 2026-11-20),
         # so no family gets more than a few markets, counting the ones where a position is already held.
+        # A share of the pool read off one snapshot of the book is noisy, and out of thousands of markets the
+        # ones that qualify in a given cycle are disproportionately the ones reading high: one placement in
+        # five was pulled a cycle later (2026-11-24). So a quote has to qualify several cycles running before
+        # it is first placed. A quote being moved to follow its price, and an offer on a position, do not wait.
+        need = int(self.c.get("enter_after_cycles", 1))
+        self.qualified = {(s.ticker, s.side): self.qualified.get((s.ticker, s.side), 0) + 1 for s in ranked}
         family_cap = int(self.c.get("max_markets_per_family") or 0)
         in_family: dict[str, set[str]] = defaultdict(set)
         for ticker, _ in list(quoted) + list(held):
@@ -280,6 +291,8 @@ class LiquidityProvider:
             key = (sq.ticker, sq.side)
             if key in quoted or held.get(key, 0) >= self.c.contracts_per_side:
                 continue        # already quoting, or already carrying a full position on this side
+            if self.qualified[key] < need and not sq.closing and sq.ticker not in self.moved:
+                continue        # not yet seen to qualify often enough in a row
             if not sq.closing and at_risk + sq.at_risk > budget:
                 continue
             q = by_ticker[sq.ticker]
