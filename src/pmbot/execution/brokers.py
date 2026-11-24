@@ -22,7 +22,7 @@ class Broker(Protocol):
     mode: str
 
     def place(self, decision_id: str, ticker: str, side: str, price: float, contracts: int, ttl_s: int,
-              queue_ahead: float = 0.0, reduce_only: bool = False) -> str | None: ...
+              queue_ahead: float = 0.0, closing: bool = False) -> str | None: ...
     def cancel(self, client_order_id: str, reason: str) -> None: ...
     def cancel_all(self, reason: str) -> None: ...
     def sync(self) -> int: ...
@@ -124,7 +124,7 @@ class ShadowBroker(_Base):
             self._set_expiry(o["client_order_id"], expires)
         return len(due)
 
-    def place(self, decision_id, ticker, side, price, contracts, ttl_s, queue_ahead=0.0, reduce_only=False) -> str | None:
+    def place(self, decision_id, ticker, side, price, contracts, ttl_s, queue_ahead=0.0, closing=False) -> str | None:
         coid = client_order_id(decision_id)
         if self.ledger.one("SELECT 1 FROM orders WHERE client_order_id=?", [coid]):
             return coid
@@ -213,19 +213,24 @@ class KalshiBroker(_Base):
             self.ledger.set_state(key, gid)
         return gid
 
-    def place(self, decision_id, ticker, side, price, contracts, ttl_s, queue_ahead=0.0, reduce_only=False) -> str | None:
+    def place(self, decision_id, ticker, side, price, contracts, ttl_s, queue_ahead=0.0, closing=False) -> str | None:
         coid = client_order_id(decision_id)
         if self.ledger.one("SELECT 1 FROM orders WHERE client_order_id=?", [coid]):
             return coid
         book_side, yes_price = book_order(side, price)
+        if closing and not self.holds(ticker, "no" if side == "yes" else "yes", contracts):
+            # An offer on a held position pairs it off; without the position it would open one on the other
+            # side, at a size no cap checked. Kalshi's reduce_only flag would enforce that, but it is refused
+            # on resting orders ("reduce_only can only be used with IoC orders", demo, 2026-11-23), so the
+            # position is read from the exchange before every such order.
+            self.ledger.risk_event("offer_refused", f"{ticker} {side}@{price} x{contracts}: the exchange does not show that position")
+            return None
         # Write the order row first: if we crash mid-request, sync() finds it by client ID.
         expires = self._record(coid, decision_id, ticker, side, price, contracts, ttl_s, "submitting")
         try:
             resp = self.client.create_order(
                 ticker, book_side, contracts, yes_price, coid, post_only=True,
-                expiration_ts=expires, order_group_id=self.order_group(), subaccount=self.subaccount,
-                # An offer on a held position must never open one on the other side, whatever the ledger believes.
-                reduce_only=reduce_only)
+                expiration_ts=expires, order_group_id=self.order_group(), subaccount=self.subaccount)
         except KalshiError as e:
             if e.code == "order_already_exists":   # an earlier attempt got through
                 self._set_status(coid, "resting")
@@ -246,6 +251,11 @@ class KalshiBroker(_Base):
                 if e.status != 404:
                     raise
         self._set_status(client_order_id, "cancelled")
+
+    def holds(self, ticker: str, side: str, contracts: float) -> bool:
+        """Whether the exchange shows at least `contracts` held on `side` of this market (positive is YES)."""
+        net = sum(float(r["position_fp"]) for r in self.client.positions(ticker=ticker) if r["ticker"] == ticker)
+        return (net if side == "yes" else -net) >= contracts - 1e-9
 
     def renew(self) -> int:
         """Push each resting order's expiry forward on the exchange. A failure leaves the order to lapse,

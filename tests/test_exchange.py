@@ -26,6 +26,7 @@ class FakeExchange:
         self.group_triggered = False
         self.fail_next_create: str | None = None   # 'drop' = accept the order but lose the response
         self.requests: list[tuple[str, str]] = []
+        self.positions: dict[str, float] = {}    # ticker -> net contracts, positive is YES
 
     def handler(self, req: httpx.Request) -> httpx.Response:
         path = req.url.path
@@ -83,6 +84,9 @@ class FakeExchange:
             want = req.url.params.get("status")
             return httpx.Response(200, json={"orders": [o for o in self.orders.values() if not want or o["status"] == want],
                                              "cursor": ""})
+        if req.method == "GET" and path == f"{P}/portfolio/positions":
+            return httpx.Response(200, json={"market_positions": [{"ticker": t, "position_fp": f"{n:.2f}"}
+                                                                  for t, n in self.positions.items()], "cursor": ""})
         if req.method == "GET" and path == f"{P}/portfolio/fills":
             return httpx.Response(200, json={"fills": self.fills, "cursor": ""})
         return httpx.Response(404, json={"error": {"code": "no_route", "path": path}})
@@ -123,11 +127,20 @@ def test_signed_order_rests_and_buying_no_becomes_a_yes_ask(rig):
     assert status(ledger, "d1") == "resting"
 
 
-def test_an_offer_on_a_held_position_is_sent_reduce_only(rig):
+def test_an_offer_is_sent_only_if_the_exchange_shows_the_position_it_closes(rig):
+    """A resting order cannot be reduce-only on Kalshi, so the position is read from the exchange first."""
     exchange, broker, ledger = rig
-    broker.place("d1", "T-1", "yes", 0.40, 10, 3600)
-    broker.place("d2", "T-1", "no", 0.58, 10, 3600, reduce_only=True)
-    assert [o["reduce_only"] for o in exchange.orders.values()] == [False, True]
+    assert broker.place("d1", "T-1", "no", 0.58, 10, 3600, closing=True) is None      # nothing held: it would open a position
+    exchange.positions["T-1"] = -10.0                                                 # 10 NO held: a NO bid would add to it
+    assert broker.place("d2", "T-1", "no", 0.58, 10, 3600, closing=True) is None
+    exchange.positions["T-1"] = 6.0                                                   # 6 YES held: too few for 10
+    assert broker.place("d3", "T-1", "no", 0.58, 10, 3600, closing=True) is None
+    assert not exchange.orders and ledger.one("SELECT COUNT(*) AS n FROM orders")["n"] == 0
+    assert ledger.one("SELECT COUNT(*) AS n FROM risk_events WHERE kind='offer_refused'")["n"] == 3
+    exchange.positions["T-1"] = 10.0
+    assert broker.place("d4", "T-1", "no", 0.58, 10, 3600, closing=True)
+    (order,) = exchange.orders.values()
+    assert (order["book_side"], order["yes_price_dollars"], order["reduce_only"]) == ("ask", "0.4200", False)
 
 
 def test_bad_signature_is_rejected(rig):
