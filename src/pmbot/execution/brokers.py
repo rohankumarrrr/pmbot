@@ -300,6 +300,10 @@ class KalshiBroker(_Base):
             return 0
         oldest = min(o["created_ts"] for o in ours.values())
         by_exchange_id: dict[str, str] = {}
+        # Orders the ledger holds as resting that the exchange has cancelled. The bot's own cancels are marked
+        # in the ledger when they are sent, so these were cancelled on the exchange's side: a lease that
+        # lapsed, a trading pause (orders carry cancel-on-pause), or something else worth knowing about.
+        gone, lapsed, when = 0, 0, []
         for eo in self.client.orders(min_ts=oldest - 60):
             coid = eo.get("client_order_id")
             if coid not in ours:
@@ -308,8 +312,15 @@ class KalshiBroker(_Base):
             status = {"resting": "resting", "canceled": "cancelled", "executed": "filled"}.get(eo.get("status"), "resting")
             if status == "cancelled" and count(eo.get("fill_count_fp")) > 0:
                 status = "partial_cancelled"
+            if status in ("cancelled", "partial_cancelled") and ours[coid]["status"] in ("resting", "partial"):
+                gone += 1
+                lapsed += ours[coid]["expires_ts"] <= now()
+                when.append(str(eo.get("last_update_time") or ""))
             self.ledger.execute("UPDATE orders SET status=?, exchange_order_id=?, updated_ts=? WHERE client_order_id=?",
                                 [status, eo["order_id"], now(), coid])
+        if gone:
+            self.ledger.risk_event("cancelled_by_exchange", f"{gone} of {len(ours)} resting orders were cancelled on the exchange, "
+                                   f"not by the bot ({lapsed} past their expiry); exchange times {min(when)[:19]} to {max(when)[:19]}")
         made = 0
         for f in self.client.fills(min_ts=oldest - 60):
             coid = by_exchange_id.get(f.get("order_id"))

@@ -143,6 +143,21 @@ def test_an_offer_is_sent_only_if_the_exchange_shows_the_position_it_closes(rig)
     assert (order["book_side"], order["yes_price_dollars"], order["reduce_only"]) == ("ask", "0.4200", False)
 
 
+def test_orders_cancelled_on_the_exchange_are_noticed(rig):
+    """Twice in one day the demo exchange cancelled every resting order and nothing in the ledger said so."""
+    exchange, broker, ledger = rig
+    broker.place("d1", "T-1", "yes", 0.40, 10, 3600)
+    broker.place("d2", "T-1", "no", 0.55, 10, 3600)
+    broker.cancel(client_order_id("d2"), "test")                    # the bot's own cancel is not an exchange cancel
+    broker.sync()
+    assert ledger.one("SELECT COUNT(*) AS n FROM risk_events WHERE kind='cancelled_by_exchange'")["n"] == 0
+    exchange._cancel_everything()                                   # a trading pause, say
+    broker.sync()
+    (event,) = ledger.query("SELECT detail FROM risk_events WHERE kind='cancelled_by_exchange'")
+    assert event["detail"].startswith("1 of 1 resting orders were cancelled on the exchange")
+    assert status(ledger, "d1") == "cancelled"
+
+
 def test_bad_signature_is_rejected(rig):
     exchange, broker, ledger = rig
     exchange.public_key = Ed25519PrivateKey.generate().public_key()
