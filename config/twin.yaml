@@ -14,3 +14,4 @@ lp:
   # live. Its budget stays at $60: with $22 held in positions that leaves about $38 for quotes, close to
   # live's $40 ($46 budget less $6 held).
   max_at_risk_per_quote: 3.85
+  offer_out_positions: true
