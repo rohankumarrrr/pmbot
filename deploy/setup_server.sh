@@ -7,7 +7,8 @@
 #
 # To install code that is not on GitHub yet, copy it first and then run the script there:
 #   rsync -az --exclude .git --exclude .venv --exclude data --exclude logs --exclude vendor \
-#         --exclude research/out --exclude __pycache__ ./ user@server:pmbot/
+#         --exclude research/out --exclude __pycache__ --exclude .claude --exclude CLAUDE.local.md \
+#         ./ user@server:pmbot/
 #   ssh user@server 'bash pmbot/deploy/setup_server.sh'
 #
 # It installs the code and a systemd service but does not start trading: the service is enabled
