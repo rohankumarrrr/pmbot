@@ -214,7 +214,7 @@ const tile = (label, value, note) => { const t = el('div', null, 'card tile'); t
 tile('Cash', usd(L && L.cash), 'not tied up in positions');
 tile('Open positions', usd(posVal), D.positions.length + ' held, cost ' + usd(posCost));
 tile('Resting quotes', usd(atRisk), D.resting.length + ' orders waiting to fill');
-tile('Trading result', signed(D.realized + posVal - posCost), 'settled ' + signed(D.realized) + ', open ' + signed(posVal - posCost));
+tile('Trading result', signed(D.realized + posVal - posCost), 'realised ' + signed(D.realized) + ', open ' + signed(posVal - posCost));
 if (D.mode !== 'shadow') tile('Rewards credited', usd(L && L.credited), 'cash Kalshi added, not from trading');
 tile('Rewards estimated', usd(L && L.estimated_rewards), "the bot's own estimate");
 if (D.peak != null) tile('Halts below', usd(D.peak * (1 - D.max_drawdown)), Math.round(D.max_drawdown * 100) + '% under the peak of ' + usd(D.peak));
@@ -295,7 +295,7 @@ draw(); let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTim
 
 // tables
 const pl = v => ({n: signed(v), cls: tone(v)});
-$('pos-sub').textContent = D.positions.length ? 'Worst first. Held until the market settles; value uses the latest tight order book.' + (D.settled_positions ? ' ' + D.settled_positions + ' more have settled (' + signed(D.realized) + ').' : '') : '';
+$('pos-sub').textContent = D.positions.length ? 'Worst first. Held until the market settles; value uses the latest tight order book.' + (D.settled_positions ? ' ' + D.settled_positions + ' more have settled. Realised so far, pair-offs included: ' + signed(D.realized) + '.' : '') : '';
 $('t-pos').append(table(['Market', 'Side', 'Contracts', 'Avg price', 'Cost', 'Value now', 'Gain / loss', 'Closes'],
   D.positions.map(p => [{market: p}, p.side.toUpperCase(), {n: p.contracts.toLocaleString()}, {n: cents(p.cost / p.contracts)}, {n: usd(p.cost)},
     {n: usd(p.value) + (p.priced ? '' : ' (at cost)')}, pl(p.value - p.cost), {n: when(p.close_ts)}]), 'No open positions.'));
