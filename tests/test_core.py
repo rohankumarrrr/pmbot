@@ -222,7 +222,108 @@ def test_yes_and_no_in_one_market_pair_off(ledger):
     fill(ledger, "a", "S-E1-A", "yes", 0.40, 10)
     fill(ledger, "b", "S-E1-A", "no", 0.55, 10)
     (p,) = positions(ledger, "shadow")
-    assert p.contracts == 0 and p.cost == pytest.approx(4 + 5.5 - 10)   # locked in a 50c gain
+    assert p.contracts == 0 and p.cost == pytest.approx(0)
+    assert account(ledger, "shadow", 100).realized == pytest.approx(10 - 4 - 5.5)
+
+
+def fifty_pairs_and_ten_no_left_over(ledger):
+    fill(ledger, "a", "S-E1-A", "yes", 0.20, 50)
+    fill(ledger, "b", "S-E1-A", "no", 0.35, 60)
+
+
+def test_a_pair_off_books_its_gain_when_it_pairs_and_leaves_the_rest_at_its_own_price(ledger):
+    fifty_pairs_and_ten_no_left_over(ledger)
+    (p,) = positions(ledger, "shadow")
+    assert (p.side, p.contracts) == ("no", 10)
+    assert p.cost == pytest.approx(10 * 0.35)
+    acct = account(ledger, "shadow", 100)
+    assert acct.cash == pytest.approx(100 - 50 * 0.20 - 60 * 0.35 + 50)
+    assert acct.realized == pytest.approx(50 * (1 - 0.20 - 0.35))
+    assert acct.equity_at_cost == pytest.approx(100 + acct.realized)
+    ledger.execute("UPDATE markets SET result='no', status='finalized'")
+    settled = account(ledger, "shadow", 100)
+    assert settled.realized == pytest.approx(50 * (1 - 0.20 - 0.35) + 10 * (1 - 0.35))
+    assert settled.cash == pytest.approx(100 + settled.realized)
+
+
+def test_bankroll_on_an_exchange_is_not_cut_by_a_gain_already_paid_on_paired_contracts(ledger):
+    from pmbot.runner import exchange_basis
+    fifty_pairs_and_ten_no_left_over(ledger)
+    cash_on_the_exchange = 100 - 50 * 0.20 - 60 * 0.35 + 50
+    bankroll, start_cash = exchange_basis(ledger, "shadow", cash_on_the_exchange)
+    assert bankroll == pytest.approx(cash_on_the_exchange + 10 * 0.35)
+    assert start_cash == pytest.approx(100)
+
+
+def test_paired_contracts_open_no_extra_room_under_the_market_cap(ledger, cfg):
+    fifty_pairs_and_ten_no_left_over(ledger)
+    market_cap = cfg.trading.max_fraction_per_market * 1000
+    v = RiskManager(ledger, cfg, "shadow", 1000).review(sizing(200), "S-E1-A", "S-E1")
+    assert v.contracts == int((market_cap - 10 * 0.35) // 0.40)
+
+
+def paired_at_a_gain_then_flat(ledger):
+    fill(ledger, "a", "S-E1-A", "yes", 0.20, 50)
+    fill(ledger, "b", "S-E1-A", "no", 0.75, 50)
+
+
+def test_contracts_bought_after_a_market_went_flat_cost_what_was_paid_for_them(ledger):
+    paired_at_a_gain_then_flat(ledger)
+    realized_while_flat = account(ledger, "shadow", 100).realized
+    assert realized_while_flat == pytest.approx(50 * (1 - 0.20 - 0.75))
+    fill(ledger, "c", "S-E1-A", "yes", 0.80, 50)
+    (p,) = positions(ledger, "shadow")
+    assert (p.side, p.contracts) == ("yes", 50)
+    assert p.cost == pytest.approx(50 * 0.80)
+    assert account(ledger, "shadow", 100).realized == pytest.approx(realized_while_flat)
+
+
+def test_an_earlier_pair_off_leaves_no_room_over_the_market_cap(ledger, cfg):
+    paired_at_a_gain_then_flat(ledger)
+    fill(ledger, "c", "S-E1-A", "yes", 0.80, 50)
+    assert 50 * 0.80 > cfg.trading.max_fraction_per_market * 1000
+    assert RiskManager(ledger, cfg, "shadow", 1000).review(sizing(200), "S-E1-A", "S-E1").contracts == 0
+
+
+def paired_at_a_gain_then_bought_back_cheap(ledger):
+    fill(ledger, "a", "S-E1-A", "yes", 0.90, 50)
+    fill(ledger, "b", "S-E1-A", "no", 0.08, 50)
+    fill(ledger, "c", "S-E1-A", "yes", 0.10, 50)
+
+
+def test_bankroll_on_an_exchange_counts_what_is_held_at_what_it_was_bought_for(ledger):
+    from pmbot.runner import exchange_basis
+    paired_at_a_gain_then_bought_back_cheap(ledger)
+    cash_on_the_exchange = 100 - 50 * 0.90 - 50 * 0.08 + 50 - 50 * 0.10
+    bankroll, start_cash = exchange_basis(ledger, "shadow", cash_on_the_exchange)
+    assert bankroll == pytest.approx(cash_on_the_exchange + 50 * 0.10)
+    assert start_cash == pytest.approx(100)
+
+
+def test_a_first_price_at_what_was_paid_is_not_a_daily_loss(ledger, cfg):
+    paired_at_a_gain_then_bought_back_cheap(ledger)
+    risk = RiskManager(ledger, cfg, "shadow", 100)
+    assert risk.check_account() is None
+    ledger.insert("snapshots", {"ticker": "S-E1-A", "ts": 1, "yes_bid": 0.09, "yes_ask": 0.11})
+    assert risk.check_account() is None
+
+
+def test_a_position_that_changes_sides_starts_again_at_the_new_side_price(ledger):
+    fill(ledger, "a", "S-E1-A", "yes", 0.30, 20)
+    fill(ledger, "b", "S-E1-A", "no", 0.60, 50)
+    (p,) = positions(ledger, "shadow")
+    assert (p.side, p.contracts) == ("no", 30)
+    assert p.cost == pytest.approx(30 * 0.60)
+    assert p.paired_gain == pytest.approx(20 * (1 - 0.30 - 0.60))
+
+
+def test_fractional_fills_that_pair_off_completely_leave_no_position(ledger):
+    fill(ledger, "a", "S-E1-A", "yes", 0.40, 0.1)
+    fill(ledger, "b", "S-E1-A", "yes", 0.40, 0.2)
+    fill(ledger, "c", "S-E1-A", "no", 0.55, 0.3)
+    (p,) = positions(ledger, "shadow")
+    assert p.contracts == 0 and p.cost == 0
+    assert account(ledger, "shadow", 100).open_positions == []
 
 
 # --- order leases -----------------------------------------------------------

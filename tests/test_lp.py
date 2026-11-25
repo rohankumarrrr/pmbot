@@ -458,8 +458,22 @@ def test_a_filled_position_is_offered_out_on_the_other_side_with_nothing_new_at_
                             "price": 0.55, "contracts": 50, "fee": 0.0, "ts": 2, "simulated": True})
     ledger.execute("UPDATE orders SET status='filled' WHERE client_order_id=?", [offer["client_order_id"]])
     [p] = positions(ledger, "shadow")
-    assert p.contracts == 0 and p.cost == pytest.approx(50 * 0.39 + 50 * 0.55 - 50)   # paired off: $3 better than cost
+    assert p.contracts == 0 and p.paired_gain == pytest.approx(50 - 50 * 0.39 - 50 * 0.55)
     assert provider.exposure()[0] == 0 and provider.exposure()[1] == {}    # the budget is free again
+
+
+def test_the_reward_budget_counts_a_position_bought_again_at_what_was_paid_for_it():
+    from pmbot.execution.brokers import client_order_id
+    from pmbot.ledger.db import new_id
+
+    provider, ledger, _, _ = filled_yes_position()
+    for side, price in (("no", 0.55), ("yes", 0.90)):
+        decision = new_id()
+        provider.broker.place(decision, "T-1", side, price, 50, 3600)
+        ledger.insert("fills", {"id": new_id(), "client_order_id": client_order_id(decision), "ticker": "T-1", "side": side,
+                                "price": price, "contracts": 50, "fee": 0.0, "ts": 2, "simulated": True})
+        ledger.execute("UPDATE orders SET status='filled' WHERE client_order_id=?", [client_order_id(decision)])
+    assert provider.exposure()[0] == pytest.approx(50 * 0.90)
 
 
 def test_an_offer_never_outlives_the_position_it_closes():
