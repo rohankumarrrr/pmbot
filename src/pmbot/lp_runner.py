@@ -230,8 +230,7 @@ class LiquidityProvider:
             "SELECT DISTINCT ticker FROM decisions WHERE mode=? AND strategy='lp'", [self.mode])}
         held = {(p.ticker, p.side): p.contracts for p in positions(self.ledger, self.mode)
                 if p.ticker in lp_tickers and not p.decided and p.contracts > 0}
-        # A position paired off by an offer holds no contracts and ties up nothing, whatever it cost.
-        inventory = sum(max(p.cost, 0.0) for p in positions(self.ledger, self.mode)
+        inventory = sum(p.cost for p in positions(self.ledger, self.mode)
                         if p.ticker in lp_tickers and not p.decided and p.contracts > 0)
         return resting + inventory, held, {(o["ticker"], o["side"]) for o in orders}
 

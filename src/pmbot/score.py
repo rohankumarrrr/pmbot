@@ -102,7 +102,7 @@ def baseline_report(ledger: Ledger, mode: str) -> dict:
 
 
 def realized_pnl(ledger: Ledger, mode: str) -> pd.DataFrame:
-    rows = [{"event_ticker": p.event_ticker, "ticker": p.ticker, "cost": p.cost, "pnl": p.payout - p.cost}
+    rows = [{"event_ticker": p.event_ticker, "ticker": p.ticker, "cost": p.cost, "pnl": p.paired_gain + p.payout - p.cost}
             for p in positions(ledger, mode) if p.settled]
     return pd.DataFrame(rows, columns=["event_ticker", "ticker", "cost", "pnl"])
 
@@ -195,7 +195,7 @@ def lp_report(ledger: Ledger, mode: str) -> dict:
         "WHERE o.mode=? AND d.kind='lp_close' AND o.status IN ('resting','partial')", [mode])["n"]
     lp_tickers = {r["ticker"] for r in ledger.query("SELECT DISTINCT ticker FROM decisions WHERE mode=? AND strategy='lp'", [mode])}
     held = [p for p in positions(ledger, mode) if p.ticker in lp_tickers]
-    realized = sum(p.payout - p.cost for p in held if p.settled)
+    realized = sum(p.paired_gain for p in held) + sum(p.payout - p.cost for p in held if p.settled)
     open_cost, open_value = 0.0, 0.0
     for p in held:
         if p.settled or p.contracts <= 0:

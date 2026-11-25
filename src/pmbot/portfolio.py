@@ -20,6 +20,7 @@ class Position:
     result: str | None   # the market's outcome, once it is known: 'yes', 'no' or 'scalar'
     status: str | None = None   # the market's status on the exchange
     settlement_value: float | None = None   # dollars a YES contract paid, for a 'scalar' result
+    paired_gain: float = 0.0
 
     @property
     def yes_value(self) -> float | None:
@@ -61,24 +62,38 @@ class Position:
 
 def positions(ledger: Ledger, mode: str) -> list[Position]:
     """Net position per market. A YES and a NO contract in one market pair off into $1."""
-    rows = ledger.query(
-        """SELECT f.ticker, m.event_ticker, m.result, m.status, m.settlement_value,
-                  SUM(CASE WHEN f.side='yes' THEN f.contracts ELSE 0 END) AS yes_n,
-                  SUM(CASE WHEN f.side='no'  THEN f.contracts ELSE 0 END) AS no_n,
-                  SUM(f.price * f.contracts + f.fee) AS paid
+    fills = ledger.query(
+        """SELECT f.ticker, f.side, f.contracts, f.price * f.contracts + f.fee AS paid,
+                  m.event_ticker, m.result, m.status, m.settlement_value
            FROM fills f JOIN orders o ON o.client_order_id = f.client_order_id
            LEFT JOIN markets m ON m.ticker = f.ticker
-           WHERE o.mode = ? GROUP BY f.ticker""",
+           WHERE o.mode = ? ORDER BY f.ts, f.rowid""",
         [mode],
     )
-    out = []
-    for r in rows:
-        paired = min(r["yes_n"], r["no_n"])           # each pair is worth exactly $1
-        net = r["yes_n"] - r["no_n"]
-        side = "yes" if net >= 0 else "no"
-        out.append(Position(r["ticker"], r["event_ticker"] or "", side, abs(net), r["paid"] - paired, r["result"], r["status"],
-                            r["settlement_value"]))
-    return out
+    held: dict[str, Position] = {}
+    for f in fills:
+        p = held.setdefault(f["ticker"], Position(f["ticker"], f["event_ticker"] or "", "yes", 0.0, 0.0, f["result"],
+                                                  f["status"], f["settlement_value"]))
+        take_fill(p, f["side"], f["contracts"], f["paid"])
+    return list(held.values())
+
+
+CONTRACT_DECIMALS = 6
+
+
+def take_fill(p: Position, side: str, contracts: float, paid: float) -> None:
+    pairs = 0.0 if side == p.side else min(p.contracts, contracts)
+    if pairs:
+        released = p.cost * pairs / p.contracts
+        p.paired_gain += pairs - released - paid * pairs / contracts
+        p.contracts = round(p.contracts - pairs, CONTRACT_DECIMALS)
+        p.cost = p.cost - released if p.contracts else 0.0
+    rest = round(contracts - pairs, CONTRACT_DECIMALS)
+    if not p.contracts:
+        p.side = side if rest else "yes"
+    if rest:
+        p.contracts = round(p.contracts + rest, CONTRACT_DECIMALS)
+        p.cost += paid * rest / contracts
 
 
 @dataclass
@@ -99,13 +114,13 @@ def account(ledger: Ledger, mode: str, start: float) -> Account:
     pos = positions(ledger, mode)
     settled = [p for p in pos if p.settled]
     open_ = [p for p in pos if not p.settled and p.contracts > 0]
-    paid = sum(p.cost for p in pos)
+    paired_gains = sum(p.paired_gain for p in pos)
     payouts = sum(p.payout for p in settled)
     return Account(
         start=start,
-        cash=start - paid + payouts,
+        cash=start - sum(p.cost for p in pos) + paired_gains + payouts,
         open_cost=sum(p.cost for p in open_),
-        realized=payouts - sum(p.cost for p in settled),
+        realized=paired_gains + payouts - sum(p.cost for p in settled),
         open_positions=open_,
     )
 

@@ -32,6 +32,7 @@ def collect(ledger: Ledger, cfg) -> dict:
 
     held, settled_n, realized = [], 0, 0.0
     for p in positions(ledger, mode):
+        realized += p.paired_gain
         if p.settled:
             settled_n += 1
             realized += p.payout - p.cost
