@@ -31,6 +31,7 @@ class LiquidityProvider:
         self.offered_out = 0                    # offers placed this step on positions already held
         self.qualified: dict[tuple[str, str], int] = {}   # cycles in a row each (market, side) has ranked as worth quoting
         self.moved: set[str] = set()            # markets whose quote was pulled this step only to follow its price
+        self.moved_not_requoted: Counter = Counter()
         self.earned: dict[str, float] = {}      # estimated dollars accrued per program this period; set each step
 
     def programs(self) -> dict[str, lp.Program]:
@@ -86,6 +87,8 @@ class LiquidityProvider:
             stats["lp_too_small_after_risk_trim"] = self.trimmed_away
         if self.offered_out:
             stats["lp_offers_on_held_positions"] = self.offered_out
+        if self.moved_not_requoted:
+            stats["lp_moved_not_requoted"] = dict(self.moved_not_requoted)
         self.ledger.set_state(f"lp_last_step:{self.mode}", stamp)
         return stats
 
@@ -253,6 +256,7 @@ class LiquidityProvider:
         # Offers on held positions do not take a quote's place: they need no budget.
         slots = self.c.max_quotes - sum(1 for o in self.my_orders() if o["kind"] != "lp_close")
         placed = 0
+        requoted: set[str] = set()
         self.trimmed_away = self.offered_out = 0
         # A post-only order is refused when the book moved between reading it and placing the order.
         # That market is repricing; leave it alone for a while instead of trying again every cycle.
@@ -336,4 +340,11 @@ class LiquidityProvider:
                 fam.add(sq.ticker)
                 at_risk += 0.0 if sq.closing else sq.price * verdict.contracts
                 self.offered_out += sq.closing
+                requoted.add(sq.ticker)
+        self.moved_not_requoted = Counter()
+        for ticker in self.moved - requoted:
+            sizes = [s.at_risk for s in ranked if s.ticker == ticker and not s.closing and (s.ticker, s.side) not in quoted]
+            self.moved_not_requoted[
+                "does_not_qualify" if not sizes else
+                "no_room" if slots <= 0 or at_risk + min(sizes) > budget else "other_rule"] += 1
         return placed

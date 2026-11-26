@@ -206,6 +206,38 @@ def test_a_market_quoted_this_period_keeps_its_slot_when_its_quotes_are_pulled()
     assert {r["ticker"] for r in resting} == {"T-2"}                    # back into T-2, not off to the better-ranked T-1
 
 
+def two_markets_whose_yes_reference_just_moved(**lp_over):
+    provider, ledger = sticky_provider(**lp_over)
+    provider.risk.bankroll = 4000.0
+    programs = {t: program(ticker=t) for t in ("T-1", "T-2")}
+    quotes = {"T-1": quote(), "T-2": quote(ticker="T-2")}
+    assert provider.place(programs, quotes, {t: (YES, NO) for t in programs}, 0.0) == 4
+    books = {t: ([(0.41, 300)] + YES, NO) for t in programs}
+    assert provider.prune(provider.my_orders(), programs, quotes, books, 0.0) == 2
+    assert dict(provider.cancel_reasons) == {"reference_moved": 2}
+    return provider, programs, quotes, books
+
+
+def test_a_moved_quote_that_finds_no_room_left_is_reported_as_such():
+    provider, programs, quotes, books = two_markets_whose_yes_reference_just_moved()
+    provider.c = config.Config({**dict(provider.c), "max_quotes": 2})
+    assert provider.place(programs, quotes, books, 0.0) == 0
+    assert dict(provider.moved_not_requoted) == {"no_room": 2}
+
+
+def test_a_moved_quote_that_is_not_worth_quoting_at_its_new_price_is_reported_as_such():
+    provider, programs, quotes, books = two_markets_whose_yes_reference_just_moved()
+    programs["T-1"] = program(reward_day=0.001)
+    assert provider.place(programs, quotes, books, 0.0) == 1
+    assert dict(provider.moved_not_requoted) == {"does_not_qualify": 1}
+
+
+def test_a_moved_quote_that_is_placed_again_is_not_reported():
+    provider, programs, quotes, books = two_markets_whose_yes_reference_just_moved()
+    assert provider.place(programs, quotes, books, 0.0) == 2
+    assert dict(provider.moved_not_requoted) == {}
+
+
 def test_room_goes_first_to_the_program_with_rewards_still_at_stake():
     """With room for one market, a program at $0.83 comes back before one already past $1."""
     provider, ledger = sticky_provider(max_quotes=4, fill_prob_day=0.0)      # no fill cost: this is about ordering only
