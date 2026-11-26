@@ -270,7 +270,8 @@ class LiquidityProvider:
         ranked = lp.rank(programs, by_ticker, books, self.c, self.risk.bankroll, stamp, self.earned, committed, held)
         # Stable sort: markets not yet quoted keep their net-yield order, after the committed ones.
         # Offers on held positions come first: they need no budget and free some when they fill.
-        ranked.sort(key=lambda s: (not s.closing, s.ticker not in committed, -self.worth_returning_to(s, programs, stamp)))
+        ranked.sort(key=lambda s: (not s.closing, s.ticker not in self.moved, s.ticker not in committed,
+                                   -self.worth_returning_to(s, programs, stamp)))
         # One piece of news can fill every quote in a family at once (17 gas-price markets on 2026-11-20),
         # so no family gets more than a few markets, counting the ones where a position is already held.
         # A share of the pool read off one snapshot of the book is noisy, and out of thousands of markets the
