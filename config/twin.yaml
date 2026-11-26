@@ -15,3 +15,5 @@ lp:
   # live's $40 ($46 budget less $6 held).
   max_at_risk_per_quote: 3.85
   offer_out_positions: true
+  enter_after_cycles: 4
+  min_bid_price: 0.03
