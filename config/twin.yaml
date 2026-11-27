@@ -17,3 +17,4 @@ lp:
   offer_out_positions: true
   enter_after_cycles: 4
   min_bid_price: 0.03
+  keep_committed_while_accrued: true
