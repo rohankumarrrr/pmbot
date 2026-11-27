@@ -128,3 +128,31 @@ def test_forecast_budget_rolls_over_24_hours_and_ignores_skipped_runs(runner):
     slots, dollars = runner.budget_left()
     assert slots == 1                            # a screened-out run does not use a slot
     assert dollars == pytest.approx(8.0 - 11 * 0.3 - 0.001)   # but its cost counts
+
+
+def test_claude_cli_recreates_workdir_if_removed(tmp_path, monkeypatch):
+    import json, os, shutil, subprocess, tempfile
+    from pmbot.llm.backend import ClaudeCLI
+
+    ephemeral = tmp_path / "gone"
+    ephemeral.mkdir()
+    monkeypatch.setenv("TMPDIR", str(ephemeral))
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    cli = ClaudeCLI(binary="claude")
+    assert cli.workdir.startswith(str(ephemeral))
+    shutil.rmtree(ephemeral)                     # caller's ephemeral TMPDIR cleaned up after launch
+
+    seen_cwd = []
+    def fake_run(cmd, **kw):
+        seen_cwd.append(kw["cwd"])
+        assert os.path.isdir(kw["cwd"])
+        assert "TMPDIR" not in kw["env"]
+        out = json.dumps({"is_error": False, "subtype": "success", "structured_output": {"ok": True}, "total_cost_usd": 0.0})
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    res = cli.run("hi", {"type": "object"}, "haiku", "sys")
+    assert res.data == {"ok": True}
+    assert seen_cwd and os.path.isdir(seen_cwd[0])
+    shutil.rmtree(cli.workdir, ignore_errors=True)
+

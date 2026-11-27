@@ -71,6 +71,11 @@ class ClaudeCLI:
         if max_budget_usd:
             cmd += ["--max-budget-usd", str(max_budget_usd)]
         env = {k: v for k, v in os.environ.items() if k not in SCRUB_ENV}
+        if "TMPDIR" in env and not os.path.isdir(env["TMPDIR"]):
+            env.pop("TMPDIR")
+        if not os.path.isdir(self.workdir):
+            tempfile.tempdir = None
+            self.workdir = tempfile.mkdtemp(prefix="pmbot-llm-")
         started = time.time()
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, cwd=self.workdir, env=env)

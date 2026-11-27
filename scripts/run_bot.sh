@@ -8,6 +8,7 @@
 # It does not stop sleep from closing a laptop lid. Stopping the bot releases it.
 cd "$(dirname "$0")/.."
 source .venv/bin/activate
+export TMPDIR=/tmp                                                        # do not inherit an ephemeral caller TMPDIR
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"   # so the `claude` CLI is found
 if [[ "$1" == "demo" ]]; then
   export PMBOT_CONFIG=config/demo.yaml
