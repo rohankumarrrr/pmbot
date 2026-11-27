@@ -18,4 +18,6 @@ if [[ "$1" == "twin" ]]; then
   export PMBOT_CONFIG=config/twin.yaml
   exec caffeinate -i pmbot cycle --every "${PMBOT_INTERVAL:-240}" --no-forecast >> logs/twin.log 2>&1
 fi
-exec caffeinate -i pmbot cycle --every "${PMBOT_INTERVAL:-600}" >> logs/bot.log 2>&1
+# LLM forecaster paused 2026-11-27 (Rohan aligned: 0.2610 vs 0.1894 Brier, -$80.46 ex-best event);
+# paper still runs LP quoting, settles existing forecasts, and logs price-correction baselines.
+exec caffeinate -i pmbot cycle --every "${PMBOT_INTERVAL:-600}" --no-forecast >> logs/bot.log 2>&1

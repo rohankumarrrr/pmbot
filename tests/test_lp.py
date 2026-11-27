@@ -311,22 +311,26 @@ def test_estimated_rewards_are_split_by_whether_the_program_would_pay():
 
 
 def test_live_quotes_use_the_whole_per_quote_cap_on_cheap_contracts():
-    """A program pays nothing under $1, so at live size a quote should put its full $5 to work."""
+    """A program pays nothing under $1, so at live size a quote should put its full cap ($10) to work."""
     now = 1_000_000
-    cheap = quote(yes_bid=0.02, yes_ask=0.05, last_price=0.03, previous_price=0.03)
-    books = {"T-1": ([(0.02, 600), (0.01, 900)], [(0.95, 400), (0.94, 900)])}
+    too_cheap = quote(yes_bid=0.02, yes_ask=0.05, last_price=0.03, previous_price=0.03)
+    books_2c = {"T-1": ([(0.02, 600), (0.01, 900)], [(0.95, 400), (0.94, 900)])}
     live, paper = config.load("config/live.yaml").lp, config.load("config/settings.yaml").lp
+    assert not [s for s in lp.rank({"T-1": program()}, {"T-1": too_cheap}, books_2c, live, 100.0, now) if s.side == "yes"]
 
+    cheap = quote(yes_bid=0.04, yes_ask=0.06, last_price=0.05, previous_price=0.05)
+    books = {"T-1": ([(0.04, 600), (0.03, 900)], [(0.94, 400), (0.93, 900)])}
     [yes] = [s for s in lp.rank({"T-1": program()}, {"T-1": cheap}, books, live, 100.0, now) if s.side == "yes"]
-    assert (yes.contracts, yes.at_risk) == (250, pytest.approx(5.0))          # was 50 contracts, $1 at risk
+    assert (yes.contracts, yes.at_risk) == (250, pytest.approx(10.0))         # full $10 cap on 4c
     [small] = [s for s in lp.rank({"T-1": program()}, {"T-1": cheap}, books, paper, 100.0, now) if s.side == "yes"]
     assert small.contracts == 50 and yes.reward_day > 3 * small.reward_day    # the larger quote earns its program's dollar sooner
-    assert not [s for s in lp.rank({"T-1": program()}, {"T-1": cheap}, books, live, 100.0, now) if s.side == "no"]   # 95c side: 5 contracts, under the minimum
 
     dearer = quote(yes_bid=0.18, yes_ask=0.22, last_price=0.20, previous_price=0.20)
     books = {"T-1": ([(0.18, 600), (0.17, 900)], [(0.78, 400), (0.77, 900)])}
     [yes] = [s for s in lp.rank({"T-1": program()}, {"T-1": dearer}, books, live, 100.0, now) if s.side == "yes"]
-    assert (yes.contracts, yes.at_risk) == (27, pytest.approx(4.86))          # still cut down to the $5 cap
+    assert (yes.contracts, yes.at_risk) == (55, pytest.approx(9.90))          # cut down to the $10 cap
+    [no] = [s for s in lp.rank({"T-1": program()}, {"T-1": dearer}, books, live, 100.0, now) if s.side == "no"]
+    assert (no.contracts, no.at_risk) == (12, pytest.approx(9.36))            # 78c side now fits >= 10 contracts under $10 cap
 
 
 def test_a_committed_quote_stays_through_the_programs_last_hours():

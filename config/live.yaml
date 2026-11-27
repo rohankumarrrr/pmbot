@@ -11,14 +11,24 @@ kalshi:
   subaccount: 1                 # the key is restricted to this subaccount; it cannot see or move anything else
 
 trading:
-  max_fraction_per_market: 0.05   # $5 of a $100 bankroll
+  max_fraction_per_market: 0.12   # raised from 0.05 on 2026-11-27 (~$9.26 on $77.17 bankroll) so live can quote above 36.5c
+  max_fraction_per_cluster: 0.12  # matches market cap so one full quote fits per event without doubling event risk
 
 lp:
-  max_at_risk_per_quote: 5.0      # dollars; about 19 quotes at $100
-  contracts_per_side: 250         # so a cheap quote uses the whole $5 (250 x 2c); the default 50 left 1c-5c quotes at $0.50-$2.50,
-                                  # too small to reach the $1 a program must earn before it pays. Dearer quotes are still cut to $5.
+  max_at_risk_per_quote: 10.0     # raised from 5.0 on 2026-11-27 (Rohan approved); capped by max_fraction_per_market
+  contracts_per_side: 250         # so cheap quotes put their full cap to work; dearer quotes are cut to the cap
   min_contracts: 10
   max_quotes: 30
+  offer_out_positions: false      # kept off on live until demo verifies closing-offer margin > cash balance
+  enter_after_cycles: 4           # promoted from twin (Exp 4): avoid one-cycle book spikes
+  min_bid_price: 0.03             # promoted from twin (Exp 3): skip 1c-2c toxic longshots
+  keep_committed_while_accrued: true  # promoted from twin (Exp 7): avoid forfeiting <$1 accrued rewards
+  fill_prob_day: 0.18             # promoted from twin (Exp 6): calibrated daily fill rate
+  fill_return:                    # <15c kept at -0.45 (live's stricter bar / twin Exp 9); 15-85c calibrated from Exp 6
+    - [0.15, -0.45]
+    - [0.50, -0.35]
+    - [0.85, -0.25]
+    - [1.01,  0.02]
 
 risk:
   max_drawdown: 0.40              # halt and cancel everything below $60 (40% under the $100 peak). Was 0.20; Rohan lowered the floor on 2026-11-21

@@ -56,3 +56,28 @@ lp_live_test:   # added 2026-11-17, before any live order: is the liquidity-rewa
         three filter gaps fixed the same day, and the question the test exists to answer (does Kalshi credit
         the rewards) was still open: payouts under $1 per program are not issued, and the bot had spread its
         quotes across 141 markets. Live stays paused until quotes that stick to a program are proven on paper.
+    - date: 2026-11-27
+      by: Rohan
+      change: >
+        Original 7-day test (2026-11-20 to 2026-11-27) failed ($0.00 credited vs -$26.92 trading loss; equity
+        $73.08). Authorized a fresh 7-day credit-verification window (2026-11-27 to 2026-12-04) on the
+        remaining $73.08 (no top-up), keeping the $60 drawdown halt (max_drawdown: 0.40), porting twin's
+        promoted LP fixes (offer_out_positions kept off until demo verifies margin), and raising the live
+        per-quote cap (trading.max_fraction_per_market: 0.12, trading.max_fraction_per_cluster: 0.12,
+        lp.max_at_risk_per_quote: 10.0).
+      baseline:
+        date: 2026-11-27
+        equity_usd: 73.08
+        cash_usd: 70.99
+        realized_pnl_usd: -22.83
+        credited_usd: 0.00
+        estimated_rewards_usd: 8.85
+        prior_fills: 32
+      why: >
+        Twin's post-fix quoting reached Kalshi's $1 payout floor and trended net positive on paper (+$5.24 at
+        mid over 3.9 days in >=$1 programs vs 3 fills), but Kalshi's actual credit-to-estimate ratio is still
+        unmeasured ($0.00 credited because live was paused on Day 1). Raising the per-quote cap from $3.65 to
+        ~$9.26 (12% of $77.17 bankroll) unblocks mid-priced markets (above 36.5c) where fill losses are less
+        severe than <15c longshots. Evaluate the three continue_if rules on new credits, new estimated rewards,
+        and new fill P&L from the 2026-11-27 baseline through 2026-12-04.
+
