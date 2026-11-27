@@ -284,6 +284,11 @@ class LiquidityProvider:
         in_family: dict[str, set[str]] = defaultdict(set)
         for ticker, _ in list(quoted) + list(held):
             in_family[lp.family(ticker, self.c)].add(ticker)
+        exposed_tickers = {t for t, _ in held} | {t for t, _ in quoted}
+        exposed_events = {by_ticker[t].event_ticker for t in exposed_tickers if t in by_ticker}
+        market_cap = self.risk.t.max_fraction_per_market * self.risk.bankroll
+        ruled_out: set[str] = set()
+        no_room: set[str] = set()
         for sq in ranked:
             if not sq.closing and (slots <= 0 or at_risk >= budget):
                 break
@@ -297,9 +302,14 @@ class LiquidityProvider:
                 continue        # already quoting, or already carrying a full position on this side
             if self.qualified[key] < need and not sq.closing and sq.ticker not in self.moved:
                 continue        # not yet seen to qualify often enough in a row
-            if not sq.closing and at_risk + sq.at_risk > budget:
-                continue
             q = by_ticker[sq.ticker]
+            if not sq.closing and at_risk + sq.at_risk > budget:
+                # A market or event with existing exposure (or a market cap below the quote size) may be trimmed
+                # by risk.review to fit the room left; skip ahead of review only when even min_contracts cannot fit.
+                may_trim = (sq.ticker in exposed_tickers or q.event_ticker in exposed_events
+                            or market_cap < sq.at_risk)
+                if not may_trim or at_risk + sq.price * self.c.min_contracts > budget:
+                    continue
             verdict = self.risk.review(Sizing(sq.side, sq.price, 0.0, 0.0, 0.0, sq.contracts), sq.ticker, q.event_ticker,
                                        closing=sq.closing)
             if set(verdict.reasons) & {"halted", "max_open_orders", "max_orders_per_hour"}:
@@ -313,8 +323,12 @@ class LiquidityProvider:
                 if verdict.contracts < self.c.min_contracts or not lp.worth_quoting(
                         part, programs[sq.ticker], self.c, stamp, self.earned.get(sq.ticker, 0.0), sq.ticker in committed):
                     self.trimmed_away += 1
+                    ruled_out.add(sq.ticker)
                     continue
                 sq = part
+            if verdict.ok and not sq.closing and at_risk + sq.at_risk > budget:
+                no_room.add(sq.ticker)
+                continue
             decision = {
                 "id": new_id(), "kind": "lp_close" if sq.closing else "lp_quote", "ticker": sq.ticker, "event_ticker": q.event_ticker,
                 "cluster": q.event_ticker, "created_ts": now(), "mode": self.mode, "strategy": "lp",
@@ -326,6 +340,7 @@ class LiquidityProvider:
             }
             self.ledger.insert("decisions", decision)
             if not verdict.ok:
+                ruled_out.add(sq.ticker)
                 continue
             try:
                 # Rewards need orders that rest, so these carry a long expiry and are managed by prune().
@@ -339,6 +354,8 @@ class LiquidityProvider:
                 slots -= 0 if sq.closing else 1
                 quoted.add(key)
                 fam.add(sq.ticker)
+                exposed_tickers.add(sq.ticker)
+                exposed_events.add(q.event_ticker)
                 at_risk += 0.0 if sq.closing else sq.price * verdict.contracts
                 self.offered_out += sq.closing
                 requoted.add(sq.ticker)
@@ -347,5 +364,6 @@ class LiquidityProvider:
             sizes = [s.at_risk for s in ranked if s.ticker == ticker and not s.closing and (s.ticker, s.side) not in quoted]
             self.moved_not_requoted[
                 "does_not_qualify" if not sizes else
-                "no_room" if slots <= 0 or at_risk + min(sizes) > budget else "other_rule"] += 1
+                "no_room" if slots <= 0 or ticker in no_room
+                or (ticker not in ruled_out and at_risk + min(sizes) > budget) else "other_rule"] += 1
         return placed

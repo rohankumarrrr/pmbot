@@ -578,3 +578,47 @@ def test_bids_below_the_minimum_price_are_neither_placed_nor_kept():
     assert not any(o["price"] < 0.03 for o in provider.my_orders())
     provider.place({"T-1": program()}, {"T-1": cheap}, books, 0.0)
     assert not any(o["price"] < 0.03 for o in provider.my_orders())                      # and it does not come back
+
+
+def test_budget_check_uses_risk_trimmed_size_when_position_already_held():
+    """A held position trims a quote under the market cap; checking budget before that trim
+    caused false no_room skips on requotes of held-position markets."""
+    provider, ledger = sticky_provider(fill_prob_day=0.0, capital_fraction=0.05)  # $25 budget on $500 bankroll
+    provider.risk.bankroll = 500.0                                                # 3% market cap = $15
+    # Hold $9.00 in T-1 (leaves $6.00 under market cap -> 15 contracts at 39c = $5.85)
+    # and $10.00 in T-2 (so total at_risk = $19.00, leaving $6.00 of budget room: enough for $5.85, not $19.50).
+    for i, (ticker, price, contracts) in enumerate((("T-1", 0.30, 30), ("T-2", 0.50, 20))):
+        did, cid = f"d-{i}", f"o-{i}"
+        ledger.insert("decisions", {"id": did, "kind": "lp_quote", "ticker": ticker, "event_ticker": f"E-{i}",
+                                    "cluster": f"E-{i}", "created_ts": 1, "mode": "shadow", "strategy": "lp",
+                                    "side": "yes", "limit_price": price, "contracts": contracts, "action": "order"})
+        ledger.insert("orders", {"client_order_id": cid, "decision_id": did, "ticker": ticker, "side": "yes",
+                                 "price": price, "contracts": contracts, "mode": "shadow", "status": "filled",
+                                 "created_ts": 1})
+        ledger.insert("fills", {"client_order_id": cid, "ticker": ticker, "side": "yes",
+                                "price": price, "contracts": contracts, "fee": 0.0, "ts": 1})
+    # Generous reward_day so the 15-contract trimmed quote still easily reaches $1.
+    programs = {"T-1": program(ticker="T-1", reward_day=400.0)}
+    quotes = {"T-1": quote(ticker="T-1", event_ticker="E-0")}
+    books = {"T-1": (YES, NO)}
+    provider.moved = {"T-1"}
+    assert provider.place(programs, quotes, books, 0.0) == 1
+    assert [(o["ticker"], o["side"], o["remaining"]) for o in provider.my_orders()] == [("T-1", "yes", 15)]
+    assert dict(provider.moved_not_requoted) == {}
+
+    # When risk trims the quote below min_contracts while untrimmed size exceeds budget, it is other_rule, not no_room.
+    provider.broker.cancel(provider.my_orders()[0]["client_order_id"], "reference_moved")
+    # Add $3.00 more held in T-1 ($12.00 total -> $3.00 market room -> 7 YES or 5 NO, both < 10 min_contracts),
+    # and raise budget to $27.00 ($5.00 room >= 10 * $0.39, still < $19.50 untrimmed).
+    ledger.insert("orders", {"client_order_id": "o-extra", "decision_id": "d-0", "ticker": "T-1", "side": "yes",
+                             "price": 0.30, "contracts": 10, "mode": "shadow", "status": "filled", "created_ts": 2})
+    ledger.insert("fills", {"client_order_id": "o-extra", "ticker": "T-1", "side": "yes",
+                            "price": 0.30, "contracts": 10, "fee": 0.0, "ts": 2})
+    provider.c = config.Config({**dict(provider.c), "capital_fraction": 0.054})  # $27 budget; $22 held -> $5 room
+    provider.moved = {"T-1"}
+    assert provider.place(programs, quotes, books, 0.0) == 0
+    assert provider.trimmed_away >= 1
+    assert dict(provider.moved_not_requoted) == {"other_rule": 1}
+
+
+
