@@ -18,3 +18,9 @@ lp:
   enter_after_cycles: 4
   min_bid_price: 0.03
   keep_committed_while_accrued: true
+  fill_prob_day: 0.18
+  fill_return:
+    - [0.15, -0.25]
+    - [0.50, -0.35]
+    - [0.85, -0.25]
+    - [1.01,  0.02]
