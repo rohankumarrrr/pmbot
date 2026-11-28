@@ -179,24 +179,28 @@ class LiquidityProvider:
                     reason = "side_below_target"
                 elif other and o["price"] + other[0][0] >= 1.0 - 1e-9:
                     reason = "would_cross"          # the other side came to us: this is now the touch
-                elif abs(side.ref - o["price"]) >= self.c.requote_ticks * tick - 1e-9:
-                    reason = "reference_moved"
-                elif closing:
-                    pass        # nothing at risk and no payout floor to reach: it rests until it fills or the price moves
                 else:
                     share = lp.my_share(levels, prog.target, prog.discount, tick, o["price"], o["remaining"], self.mode != "shadow")
-                    gross = prog.reward_day * share / 2 / (o["price"] * o["remaining"])
-                    days_left = max((prog.end_ts - stamp) / DAY, 0)
-                    net = gross + self.c.fill_prob_day * lp.fill_return(o["price"], self.c)
-                    # The program's accrual is shared between our quotes there, so each side protects its part.
-                    banked = self.earned.get(o["ticker"], 0.0) / max(sides.get(o["ticker"], 1), 1)
-                    why.update(share=round(share, 4), gross_yield_day=round(gross, 4), net_yield_day=round(net, 4),
-                               banked=round(self.earned.get(o["ticker"], 0.0), 4), days_left=round(days_left, 2),
-                               program_rate_day=round(rate.get(o["ticker"], 0.0), 4))
-                    if net < 0 and not lp.worth_staying(banked, net, o["price"] * o["remaining"], days_left, self.c):
-                        reason = "yield_below_fill_cost"     # the pool got crowded, or the ranking rules changed
-                    elif self.earned.get(o["ticker"], 0.0) + rate.get(o["ticker"], 0.0) * days_left < lp.MIN_PAYOUT:
-                        reason = "cannot_reach_payout"       # resting here takes fill risk for a reward that will not be paid
+                    if (abs(side.ref - o["price"]) >= self.c.requote_ticks * tick - 1e-9
+                            or (share <= 0 and o["price"] < side.ref - 1e-9)):
+                        reason = "reference_moved"  # even a 1-tick move drops share to 0 when levels above fill Target Size
+                        if share <= 0:
+                            why["share"] = 0.0
+                    elif closing:
+                        pass        # nothing at risk and no payout floor to reach: it rests until it fills or the price moves
+                    else:
+                        gross = prog.reward_day * share / 2 / (o["price"] * o["remaining"])
+                        days_left = lp.quoting_days_left(prog, q, self.c, stamp)
+                        net = gross + self.c.fill_prob_day * lp.fill_return(o["price"], self.c)
+                        # The program's accrual is shared between our quotes there, so each side protects its part.
+                        banked = self.earned.get(o["ticker"], 0.0) / max(sides.get(o["ticker"], 1), 1)
+                        why.update(share=round(share, 4), gross_yield_day=round(gross, 4), net_yield_day=round(net, 4),
+                                   banked=round(self.earned.get(o["ticker"], 0.0), 4), days_left=round(days_left, 2),
+                                   program_rate_day=round(rate.get(o["ticker"], 0.0), 4))
+                        if net < 0 and not lp.worth_staying(banked, net, o["price"] * o["remaining"], days_left, self.c):
+                            reason = "yield_below_fill_cost"     # the pool got crowded, or the ranking rules changed
+                        elif self.earned.get(o["ticker"], 0.0) + rate.get(o["ticker"], 0.0) * days_left < lp.MIN_PAYOUT:
+                            reason = "cannot_reach_payout"       # resting here takes fill risk for a reward that will not be paid
             if reason:
                 self.broker.cancel(o["client_order_id"], reason)
                 # Kept per order: which rule pulled a quote, and on what numbers, is how a leak of rewards is traced.
@@ -237,17 +241,17 @@ class LiquidityProvider:
                         if p.ticker in lp_tickers and not p.decided and p.contracts > 0)
         return resting + inventory, held, {(o["ticker"], o["side"]) for o in orders}
 
-    def worth_returning_to(self, sq: lp.SideQuote, programs, stamp: float) -> float:
+    def worth_returning_to(self, sq: lp.SideQuote, programs, by_ticker, stamp: float) -> float:
         """Dollars of reward that quoting a committed market again would secure, for ordering them when
         room is short (the budget, or the cap on one event).
 
-        What the quote would still earn by the end of the period, plus what is already banked there if the
+        What the quote would still earn before the bot must leave, plus what is already banked there if the
         program has not reached $1 yet: that part is lost unless the program gets there. Ordering by what
         was banked alone gave the room to a program already past $1, which loses nothing by waiting, and
         left one at $0.83 out of its own event (twin, 2026-11-24).
         """
         prog, banked = programs[sq.ticker], self.earned.get(sq.ticker, 0.0)
-        still = sq.reward_day * max((prog.end_ts - stamp) / DAY, 0)
+        still = sq.reward_day * lp.quoting_days_left(prog, by_ticker.get(sq.ticker), self.c, stamp)
         return still + (banked if banked < lp.MIN_PAYOUT else 0.0)
 
     def place(self, programs, by_ticker, books, stamp: float) -> int:
@@ -271,7 +275,7 @@ class LiquidityProvider:
         # Stable sort: markets not yet quoted keep their net-yield order, after the committed ones.
         # Offers on held positions come first: they need no budget and free some when they fill.
         ranked.sort(key=lambda s: (not s.closing, s.ticker not in self.moved, s.ticker not in committed,
-                                   -self.worth_returning_to(s, programs, stamp)))
+                                   -self.worth_returning_to(s, programs, by_ticker, stamp)))
         # One piece of news can fill every quote in a family at once (17 gas-price markets on 2026-11-20),
         # so no family gets more than a few markets, counting the ones where a position is already held.
         # A share of the pool read off one snapshot of the book is noisy, and out of thousands of markets the
@@ -321,7 +325,7 @@ class LiquidityProvider:
                 # pulled within minutes as `cannot_reach_payout` and placed again, cycle after cycle.
                 part = lp.resized(sq, verdict.contracts, programs[sq.ticker], q, books[sq.ticker])
                 if verdict.contracts < self.c.min_contracts or not lp.worth_quoting(
-                        part, programs[sq.ticker], self.c, stamp, self.earned.get(sq.ticker, 0.0), sq.ticker in committed):
+                        part, programs[sq.ticker], self.c, stamp, self.earned.get(sq.ticker, 0.0), sq.ticker in committed, q=q):
                     self.trimmed_away += 1
                     ruled_out.add(sq.ticker)
                     continue

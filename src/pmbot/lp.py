@@ -280,14 +280,28 @@ def closing_quote(sq: SideQuote, contracts: int, prog: Program, q: Quote, book: 
                      part.queue_ahead, closing=True)
 
 
-def worth_quoting(sq: SideQuote, prog: Program, lp, now: float, accrued: float, committed: bool) -> bool:
+def quoting_days_left(prog: Program, q: Quote | None, lp, now: float) -> float:
+    """Days left in the program during which the bot is allowed to keep quoting.
+
+    `market_reasons` pulls any quote once the market is within `min_hours_to_close` of deciding, even for a
+    committed program. Counting reward time past that cutoff let the bot enter a market hours before the
+    cutoff and forfeit everything it accrued there (KXTOKENUSE on live, 2026-11-28).
+    """
+    end = prog.end_ts
+    if q is not None and q.decides_ts:
+        end = min(end, q.decides_ts - lp.min_hours_to_close * 3600)
+    return max((end - now) / DAY, 0.0)
+
+
+def worth_quoting(sq: SideQuote, prog: Program, lp, now: float, accrued: float, committed: bool,
+                  q: Quote | None = None) -> bool:
     """Whether a quote of this size earns its place: the program can reach its payout, and the reward covers the fills.
 
     A program pays nothing below $1 for the period, so what is already earned there (`accrued`) plus what
-    this quote would add by the end has to clear it: with a margin for a new market, exactly for a
-    `committed` one (already quoted this period).
+    this quote would add before the bot must leave has to clear it: with a margin for a new market,
+    exactly for a `committed` one (already quoted this period).
     """
-    days_left = max((prog.end_ts - now) / DAY, 0)
+    days_left = quoting_days_left(prog, q, lp, now)
     floor = MIN_PAYOUT if committed else lp.min_expected_payout
     if accrued + sq.reward_day * days_left < floor:
         return False
@@ -335,7 +349,7 @@ def rank(programs: dict[str, Program], quotes: dict[str, Quote], books: dict[str
                 if n < lp.min_contracts:
                     continue
                 sq = resized(sq, n, prog, q, book)
-            if worth_quoting(sq, prog, lp, now, accrued.get(ticker, 0.0), ticker in committed):
+            if worth_quoting(sq, prog, lp, now, accrued.get(ticker, 0.0), ticker in committed, q=q):
                 out.append(sq)
     out.sort(key=lambda s: -s.net_yield_day(lp))
     return out

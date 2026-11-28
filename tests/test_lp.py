@@ -626,3 +626,50 @@ def test_budget_check_uses_risk_trimmed_size_when_position_already_held():
 
 
 
+
+
+def test_expected_payout_caps_horizon_at_close_cutoff():
+    """A market 4 hours before its min_hours_to_close cutoff cannot earn $1.50 even if the program lasts days longer."""
+    day = 86400
+    prog = program(reward_day=100.0, start_ts=0, end_ts=3 * day)
+    # 50 contracts on yes earns ~$2.94/day: ~$0.49 in 4h (< $1.50), ~$2.94 in 24h (>= $1.50).
+    q = quote(close_ts=52 * 3600)
+    yes = [(0.10, 500), (0.09, 600)]
+    no = [(0.88, 500), (0.87, 600)]
+    provider, _ = sticky_provider(fill_prob_day=0.0, min_hours_to_close=48, min_expected_payout=1.5)
+    assert lp.quoting_days_left(prog, q, provider.c, 0.0) == pytest.approx(4 / 24)
+    assert lp.rank({"T-1": prog}, {"T-1": q}, {"T-1": (yes, no)}, provider.c, 100.0, 0.0) == []
+    # With 72h to close (24h of quoting left), the same quote clears $1.50 and ranks.
+    q_far = quote(close_ts=72 * 3600)
+    assert lp.rank({"T-1": prog}, {"T-1": q_far}, {"T-1": (yes, no)}, provider.c, 100.0, 0.0)
+    # Once placed at 72h to close, approaching 50h (2h before cutoff) with $0.30 banked triggers cannot_reach_payout.
+    assert provider.place({"T-1": prog}, {"T-1": q_far}, {"T-1": (yes, no)}, 0.0) >= 1
+    provider.earned["T-1"] = 0.30
+    q_near = quote(close_ts=50 * 3600)
+    assert provider.prune(provider.my_orders(), {"T-1": prog}, {"T-1": q_near}, {"T-1": (yes, no)}, 0.0) >= 1
+    assert provider.cancel_reasons["cannot_reach_payout"] >= 1
+
+
+def test_one_tick_move_dropping_share_to_zero_requotes_immediately():
+    """When a 1-tick move fills Target Size above our bid so share=0, treat it as reference_moved and requote at once."""
+    yes0 = [(0.06, 500), (0.05, 600)]
+    no = [(0.91, 500), (0.90, 600)]
+    q = quote(yes_bid=0.06, yes_ask=0.09, last_price=0.07, previous_price=0.07)
+    prog = program(reward_day=200.0, start_ts=0, end_ts=5 * 86400)
+    provider, _ = sticky_provider(enter_after_cycles=4, requote_ticks=2, fill_prob_day=0.18)
+    provider.risk.bankroll = 100.0
+    # Qualify and place at 0.06 (4 cycles running).
+    for _ in range(4):
+        provider.place({"T-1": prog}, {"T-1": q}, {"T-1": (yes0, no)}, 0.0)
+    assert [(o["side"], o["price"]) for o in provider.my_orders() if o["side"] == "yes"] == [("yes", 0.06)]
+    # 1-tick move: 0.07 arrives with >= TARGET size, so ref=0.07 (< 2 ticks away) and share at 0.06 drops to 0.
+    yes1 = [(0.07, 1000)] + yes0
+    q1 = quote(yes_bid=0.07, yes_ask=0.09, last_price=0.07, previous_price=0.07)
+    provider.earned["T-1"] = 0.95
+    assert provider.prune(provider.my_orders(), {"T-1": prog}, {"T-1": q1}, {"T-1": (yes1, no)}, 0.0) >= 1
+    assert provider.cancel_reasons["reference_moved"] == 1
+    assert provider.cancel_reasons["yield_below_fill_cost"] == 0
+    assert "T-1" in provider.moved
+    # Requotes immediately in the same step at 0.07 without waiting enter_after_cycles=4 again.
+    assert provider.place({"T-1": prog}, {"T-1": q1}, {"T-1": (yes1, no)}, 0.0) >= 1
+    assert ("yes", 0.07) in [(o["side"], o["price"]) for o in provider.my_orders()]
