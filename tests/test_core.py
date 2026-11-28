@@ -391,7 +391,7 @@ def test_halt_blocks_orders_until_resumed(ledger, cfg):
 
 def test_drawdown_halts(ledger, cfg):
     ledger.insert("snapshots", {"ticker": "S-E1-A", "ts": now(), "yes_bid": 0.04, "yes_ask": 0.06})
-    fill(ledger, "a", "S-E1-A", "yes", 0.50, 500)     # $250 position now marked at 5c
+    fill(ledger, "a", "S-E1-A", "yes", 0.50, 1000)    # $500 position now marked at 5c (-45% drawdown)
     risk = RiskManager(ledger, cfg, "shadow", 1000)
     assert "drawdown" in (risk.check_account() or "")
 

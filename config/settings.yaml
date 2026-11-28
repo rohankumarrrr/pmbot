@@ -84,7 +84,7 @@ lp:   # liquidity provision in markets that pay Kalshi liquidity rewards
   refresh_programs_minutes: 60
 
 risk:
-  max_drawdown: 0.20
+  max_drawdown: 0.40            # paper/demo default (live.yaml sets 0.40 explicitly); shadow equity omits estimated LP rewards
   daily_loss_limit: 0.05
   max_open_orders: 120
   max_orders_per_hour: 90
